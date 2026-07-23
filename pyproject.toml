@@ -1,0 +1,16 @@
+# This is a workspace root configuration file
+# It doesn't define a buildable package, just manages the workspace
+
+[tool.uv.workspace]
+members = [
+    "pobi",
+    "pobi/pobi_agent",
+    "pobi/pobi_prompts",
+    "pobi/pobi_eval",
+    "pobi/simple-python-interpreter-sandbox",
+]
+
+# Note: Publishing is configured to only publish the main package
+# Individual packages are bundled into the main pobi package
+
+

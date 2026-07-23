@@ -1,0 +1,322 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.0.0)'
+        required: true
+        type: string
+
+jobs:
+  build-server:
+    name: Build Server for ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            target: x86_64-unknown-linux-gnu
+            archive_ext: tar.gz
+            archive_cmd: tar -czf
+          - os: macos-latest
+            platform: macos
+            target: aarch64-apple-darwin
+            archive_ext: tar.gz
+            archive_cmd: tar -czf
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Checkout required submodule
+        run: |
+          git submodule sync -- pobi/simple-python-interpreter-sandbox
+          git submodule update --init -- pobi/simple-python-interpreter-sandbox
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install Python 3.10
+        run: uv python install 3.10
+
+      - name: Install dependencies
+        working-directory: pobi
+        run: |
+          uv sync --locked
+
+      - name: Build with PyOxidizer
+        working-directory: pobi/installer
+        env:
+          PYOXIDIZER_BUILD_MODE: release
+        run: |
+          uv run pyoxidizer build --target-triple ${{ matrix.target }} --release
+
+      - name: Determine build directory
+        id: build_dir
+        working-directory: pobi/installer
+        shell: bash
+        run: |
+          BUILD_DIR="build/${{ matrix.target }}/release/install"
+          echo "build_dir=$BUILD_DIR" >> $GITHUB_OUTPUT
+          echo "Build directory: $BUILD_DIR"
+
+      - name: Copy wrapper script
+        working-directory: pobi/installer
+        run: |
+          cp pobi.sh ${{ steps.build_dir.outputs.build_dir }}/pobi.sh
+          chmod +x ${{ steps.build_dir.outputs.build_dir }}/pobi.sh
+
+      - name: Copy Python sandbox assets
+        working-directory: pobi/installer
+        run: |
+          mkdir -p ${{ steps.build_dir.outputs.build_dir }}/lib
+          cp -R ../simple-python-interpreter-sandbox/python_sandbox_client \
+            ${{ steps.build_dir.outputs.build_dir }}/lib/python_sandbox_client
+          cp -R ../simple-python-interpreter-sandbox/python_sandbox_tool \
+            ${{ steps.build_dir.outputs.build_dir }}/lib/python_sandbox_tool
+
+      - name: Fix permissions
+        working-directory: pobi/installer
+        run: |
+          bash fix_permissions.sh ${{ steps.build_dir.outputs.build_dir }}
+
+      - name: Install Playwright browsers
+        working-directory: pobi/installer
+        run: |
+          chmod +x install_playwright_browsers.sh
+          bash install_playwright_browsers.sh ${{ steps.build_dir.outputs.build_dir }}
+
+      - name: Verify browser installation
+        working-directory: pobi/installer
+        run: |
+          BROWSER_PATH="${{ steps.build_dir.outputs.build_dir }}/lib/playwright/driver/package/.local-browsers"
+          echo "Checking browser installation at: $BROWSER_PATH"
+          ls -la "$BROWSER_PATH" || echo "Browser directory not found"
+          echo ""
+          echo "Looking for chromium_headless_shell directories:"
+          find "$BROWSER_PATH" -maxdepth 1 -type d -name "chromium_headless_shell-*" || echo "No chromium_headless_shell directories found"
+          echo ""
+          echo "Looking for browser executables:"
+          find "$BROWSER_PATH" -type f \( -name "chrome-headless-shell" -o -name "chrome-headless-shell*" -o -name "chrome*" -o -name "chromium*" \) | head -10 || echo "No browser binaries found"
+          echo ""
+          echo "Checking directory structure:"
+          find "$BROWSER_PATH" -type d -name "*chrome*" -o -name "*chromium*" | head -10 || echo "No browser directories found"
+
+      - name: Verify Python sandbox assets
+        working-directory: pobi/installer
+        run: |
+          test -f ${{ steps.build_dir.outputs.build_dir }}/lib/python_sandbox_client/pool.py
+          test -f ${{ steps.build_dir.outputs.build_dir }}/lib/python_sandbox_tool/main_stdio.ts
+          test -f ${{ steps.build_dir.outputs.build_dir }}/lib/python_sandbox_tool/deno.json
+
+      - name: Create package directory structure
+        id: package
+        working-directory: pobi/installer
+        run: |
+          PACKAGE_NAME="pobi-${{ matrix.platform }}-${{ matrix.target }}"
+          mkdir -p "$PACKAGE_NAME"
+          cp -r ${{ steps.build_dir.outputs.build_dir }}/* "$PACKAGE_NAME/"
+          echo "name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+
+      - name: Create archive
+        working-directory: pobi/installer
+        run: |
+          ${{ matrix.archive_cmd }} "${{ steps.package.outputs.name }}.${{ matrix.archive_ext }}" "${{ steps.package.outputs.name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pobi-server-${{ matrix.platform }}-${{ matrix.target }}
+          path: pobi/installer/${{ steps.package.outputs.name }}.${{ matrix.archive_ext }}
+          retention-days: 30
+
+  build-cli:
+    name: Build CLI for ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            arch: x86_64
+            target: bun-linux-x64
+          - os: macos-latest
+            platform: macos
+            arch: aarch64
+            target: bun-darwin-arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        working-directory: cli/pobi
+        run: bun install --frozen-lockfile
+
+      - name: Build CLI binary
+        working-directory: cli/pobi
+        run: |
+          bun build --compile \
+            --target=${{ matrix.target }} \
+            --outfile pobi \
+            index.ts
+
+      - name: Create package directory
+        id: package
+        working-directory: cli/pobi
+        run: |
+          PACKAGE_NAME="pobi-${{ matrix.platform }}-${{ matrix.arch }}"
+          mkdir -p "$PACKAGE_NAME"
+          cp pobi "$PACKAGE_NAME/"
+          echo "name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+
+      - name: Create archive
+        working-directory: cli/pobi
+        run: |
+          tar -czf "${{ steps.package.outputs.name }}.tar.gz" "${{ steps.package.outputs.name }}"
+
+      - name: Create checksum
+        working-directory: cli/pobi
+        run: |
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${{ steps.package.outputs.name }}.tar.gz" > "${{ steps.package.outputs.name }}.tar.gz.sha256"
+          else
+            shasum -a 256 "${{ steps.package.outputs.name }}.tar.gz" > "${{ steps.package.outputs.name }}.tar.gz.sha256"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pobi-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            cli/pobi/${{ steps.package.outputs.name }}.tar.gz
+            cli/pobi/${{ steps.package.outputs.name }}.tar.gz.sha256
+          retention-days: 30
+
+  release:
+    name: Create Release
+    needs: [build-server, build-cli]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+      id-token: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create checksums for server packages
+        shell: bash
+        run: |
+          cd artifacts
+          for dir in pobi-server-*; do
+            if [ -d "$dir" ]; then
+              for file in "$dir"/*.tar.gz; do
+                if [ -f "$file" ]; then
+                  # Create checksum with just the filename (not the path)
+                  filename=$(basename "$file")
+                  (cd "$dir" && sha256sum "$filename" > "${filename}.sha256")
+                fi
+              done
+            fi
+          done
+          # Also create checksums for CLI packages
+          for dir in pobi-*; do
+            if [ -d "$dir" ]; then
+              for file in "$dir"/*.tar.gz; do
+                if [ -f "$file" ]; then
+                  filename=$(basename "$file")
+                  (cd "$dir" && sha256sum "$filename" > "${filename}.sha256")
+                fi
+              done
+            fi
+          done
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Release ${{ steps.version.outputs.version }}
+          body: |
+            ## Pobi CLI ${{ steps.version.outputs.version }} version
+
+            ### What's new
+            I had enough of ink. I'm sorry, too much annoying. OpenTUI is way better to implement and less buggy (should have done the whole project in Rust and ratatui since the beginning :') )
+            The overview of the new cool features :
+            - We can now switch between different types of validations (flag, judge, recon). 
+            - Report is generated at recon end and when a vulnerability is discovered. Or when asking for a report.
+            - Ctrl+O to expand the tools results.
+            - Ctrl+T to view the tasks. 
+            - Agentic virtual filesystem for agent memory
+            
+            ### Installation
+            
+            Download and run the install script:
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ steps.version.outputs.version }}/install.sh | bash -s -- --version ${{ steps.version.outputs.version }}
+            ```
+            
+            Or manually extract and install:
+            ```bash
+            tar -xzf pobi-<platform>-<arch>.tar.gz
+            cd pobi-<platform>-<arch>
+            sudo cp -r * /usr/local/
+            
+            ### Server Downloads (RPC Server)
+            
+            **Linux (x86_64):**
+            - `pobi-linux-x86_64-unknown-linux-gnu.tar.gz`
+            
+            **macOS (ARM64):**
+            - `pobi-macos-aarch64-apple-darwin.tar.gz`
+            
+            ### CLI Downloads (Interface)
+            
+            **Linux (x86_64):**
+            - `pobi-linux-x86_64.tar.gz`
+            
+            **macOS (ARM64):**
+            - `pobi-macos-aarch64.tar.gz`
+
+
+            Hope you enjoy the new release, let me know if this works for macos and linux
+            ```
+          files: |
+            artifacts/**/*
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

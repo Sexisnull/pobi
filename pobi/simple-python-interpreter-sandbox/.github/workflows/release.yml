@@ -1,0 +1,63 @@
+name: Release binaries
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: linux-x86_64-gnu
+          - runner: macos-14
+            target: darwin-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.7.3
+
+      - name: Compile bundled worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./compile.sh "${{ matrix.target }}"
+          BINARY_NAME="python-sandbox-worker-${{ matrix.target }}"
+          CHECKSUM_NAME="${BINARY_NAME}.sha256"
+          cp "python_sandbox_client/bin/${{ matrix.target }}/python-sandbox-worker" "$BINARY_NAME"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$BINARY_NAME" > "$CHECKSUM_NAME"
+          else
+            shasum -a 256 "$BINARY_NAME" > "$CHECKSUM_NAME"
+          fi
+          echo "binary_name=$BINARY_NAME" >> "$GITHUB_ENV"
+          echo "checksum_name=$CHECKSUM_NAME" >> "$GITHUB_ENV"
+
+      - name: Show binary info
+        shell: bash
+        run: |
+          ls -lah
+          file "${{ env.binary_name }}" || true
+          cat "${{ env.checksum_name }}"
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.binary_name }}
+            ${{ env.checksum_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,163 @@
+# Copyright (C) 2025 Yassine Bargach
+# Licensed under the GNU Affero General Public License v3
+# See LICENSE file for full license information.
+
+"""Pobi CLI entrypoint using Typer.
+
+Defines maintenance and evaluation commands for the Python package.
+"""
+import asyncio
+import importlib.metadata
+import os
+import logging
+import docker
+import typer
+from rich.console import Console
+from pobi_agent import config_setup
+from .cli_logging import setup_logging
+from .init import init_cli_config, check_docker
+from .eval import eval_interface
+from .run import run_scan
+
+# Fix Docker socket path if default doesn't exist
+if not os.path.exists("/var/run/docker.sock"):
+    docker_socket = os.path.expanduser("~/.docker/run/docker.sock")
+    if os.path.exists(docker_socket):
+        os.environ["DOCKER_HOST"] = f"unix://{docker_socket}"
+
+console = Console()
+app = typer.Typer(help="Pobi CLI - Python maintenance and evaluation commands.")
+
+
+@app.command()
+def version():
+    """Show the version of the Pobi framework."""
+    try:
+        package_version = importlib.metadata.version("pobi")
+        console.print(f"[bold green]Pobi CLI v{package_version}[/bold green]")
+    except importlib.metadata.PackageNotFoundError:
+        console.print(
+            "[bold red]Pobi CLI[/bold red] - [yellow]Version not available[/yellow]"
+        )
+
+@app.command()
+def eval_agent(
+    eval_metadata_file: str = typer.Option(
+        None,
+        help="Dataset file containing all the information about the challenges to run",
+    ),
+    provider: str = typer.Option(
+        default="azure_ai", help="Provider name"
+    ),
+    model_name: str = typer.Option(
+        default="Kimi-K2.5", help="Model name"
+    ),
+    guided: bool = typer.Option(
+        False, help="Run subtasks instead of one general task."
+    ),
+):
+    """Run the evaluation agent on a dataset of challenges.
+
+    Args:
+        eval_metadata_file: Path to the dataset file describing challenges.
+        llm_providers: List of model providers to use.
+        guided: If True, run subtasks instead of a single general task.
+    """
+    # Init configurations
+    # Check Docker availability first
+    docker_client = docker.from_env()
+    if not check_docker(docker_client):
+        console.print(
+            "\n[red]Docker is required for this application to function properly.[/red]"
+        )
+        console.print("Please install Docker from: https://docs.docker.com/get-docker/")
+        console.print(
+            "Make sure Docker daemon is running, then run this command again."
+        )
+        raise typer.Exit(1)
+
+    config = config_setup()
+    log_level_name = str(config.log_level or "INFO").upper()
+    log_level = getattr(logging, log_level_name, logging.INFO)
+    setup_logging(level=log_level)
+    # start eval
+    try:
+        asyncio.run(
+            eval_interface(
+                config=config,
+                eval_metadata_file=eval_metadata_file,
+                provider=provider,
+                model_name=model_name,
+            )
+        )
+    finally:
+        pass
+
+
+@app.command()
+def init():
+    """Initialize CLI config by prompting for env vars and saving to cache JSON.
+
+    Writes to ~/.pobi/config.json
+    """
+    init_cli_config()
+
+
+@app.command()
+def run(
+    target: str = typer.Option(
+        ..., "--target", "-t",
+        help="Target URL, e.g. http://127.0.0.1:8005 (or http://host.docker.internal:8005 when the sandbox needs to reach your host).",
+    ),
+    prompt: str = typer.Option(
+        "Perform a black-box web application security assessment. "
+        "Enumerate the attack surface, identify vulnerabilities across the OWASP Top 10 "
+        "(injection, broken auth, XSS, IDOR, SSRF, deserialization, security misconfig, etc.), "
+        "demonstrate exploitation with concrete evidence (requests, responses, extracted data), "
+        "and produce a written report of every confirmed finding with reproduction steps and impact.",
+        "--prompt", "-p",
+        help="Instruction the agent should follow. Default: OWASP-style black-box assessment.",
+    ),
+    provider: str = typer.Option(
+        None, "--provider",
+        help="LLM provider. Default: POBI_DEFAULT_PROVIDER env var, else first provider in ~/.pobi/config.json.",
+    ),
+    model_name: str = typer.Option(
+        None, "--model",
+        help="Model name. Default: POBI_DEFAULT_MODEL env var, else first model for the chosen provider.",
+    ),
+    with_indexing: bool = typer.Option(
+        False, "--index",
+        help="Crawl the target and index its assets before scanning (slower first run, better recon).",
+    ),
+    max_depth: int = typer.Option(3, help="ADaPT decomposition depth."),
+):
+    """Scan a live target and produce a report.
+
+    Example:
+        pobi run --target http://127.0.0.1:8005
+    """
+    docker_client = docker.from_env()
+    if not check_docker(docker_client):
+        console.print(
+            "\n[red]Docker is required for this application to function properly.[/red]"
+        )
+        console.print("Please install Docker from: https://docs.docker.com/get-docker/")
+        raise typer.Exit(1)
+
+    config = config_setup()
+    log_level_name = str(config.log_level or "INFO").upper()
+    log_level = getattr(logging, log_level_name, logging.INFO)
+    setup_logging(level=log_level)
+
+    asyncio.run(
+        run_scan(
+            config=config,
+            target=target,
+            prompt=prompt,
+            provider=provider,
+            model_name=model_name,
+            with_indexing=with_indexing,
+            max_depth=max_depth,
+        )
+    )

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title data-i18n="Pobi // Web Console">Pobi // Web Console</title>
+  <meta name="color-scheme" content="dark" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <div id="app" class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">⌖</div>
+        <div class="brand-text">
+          <span class="brand-name">POBI</span>
+          <span class="brand-sub">web console</span>
+        </div>
+      </div>
+      <nav class="nav">
+        <a class="nav-item" data-route="dashboard" href="#dashboard"><span class="ico">▦</span><span data-i18n="Dashboard">Dashboard</span></a>
+        <a class="nav-item" data-route="scan" href="#scan"><span class="ico">✛</span><span data-i18n="New Scan">New Scan</span></a>
+        <a class="nav-item" data-route="monitor" href="#monitor"><span class="ico">◉</span><span data-i18n="Monitor">Monitor</span></a>
+        <a class="nav-item" data-route="live" href="#live"><span class="ico">⚡</span><span data-i18n="Live">Live</span></a>
+        <a class="nav-item" data-route="agents" href="#agents"><span class="ico">⌬</span><span data-i18n="Agents">Agents</span></a>
+        <a class="nav-item" data-route="validation" href="#validation"><span class="ico">✓</span><span data-i18n="Validation">Validation</span></a>
+        <a class="nav-item" data-route="scope" href="#scope"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><line x1="12" y1="1" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="23"/><line x1="1" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="23" y2="12"/></svg><span data-i18n="Scope">Scope</span></a>
+        <a class="nav-item" data-route="plan" href="#plan"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="6" rx="1"/><rect x="14" y="15" width="7" height="6" rx="1"/><path d="M6.5 9v6h7.5"/></svg><span data-i18n="Plan">Plan</span></a>
+        <a class="nav-item" data-route="results" href="#results"><span class="ico">⊞</span><span data-i18n="Results">Results</span></a>
+        <a class="nav-item" data-route="history" href="#history"><span class="ico">☰</span><span data-i18n="History">History</span></a>
+        <a class="nav-item" data-route="vulns" href="#vulns"><span class="ico">⚠</span><span data-i18n="Vulnerabilities">Vulnerabilities</span></a>
+        <a class="nav-item" data-route="tokens" href="#tokens"><span class="ico">◧</span><span data-i18n="Token Usage">Token Usage</span></a>
+        <a class="nav-item" data-route="reports" href="#reports"><span class="ico">▤</span><span data-i18n="Reports">Reports</span></a>
+        <a class="nav-item" data-route="settings" href="#settings"><span class="ico">⚙</span><span data-i18n="Settings">Settings</span></a>
+        <a class="nav-item" data-route="audit" href="#audit"><span class="ico">✓</span><span data-i18n="Audit">Audit</span></a>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="conn" id="connDot" title="daemon connection"><span class="dot"></span><span id="connText" data-i18n="connecting…">connecting…</span></div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation" onclick="document.querySelector('.app').classList.toggle('nav-open')">☰</button>
+          <span class="crumb" id="crumb">Dashboard</span>
+        </div>
+        <div class="topbar-right">
+          <button class="lang-btn" data-lang="en" onclick="setLang('en')">EN</button>
+          <button class="lang-btn" data-lang="zh" onclick="setLang('zh')">中</button>
+          <span class="badge" id="modeBadge">—</span>
+          <span class="badge ghost" id="subsBadge">0 live</span>
+          <span class="op"><span data-i18n="operator:">operator:</span> <b id="opName">web-operator</b></span>
+        </div>
+      </header>
+      <main id="view" class="view"></main>
+    </div>
+  </div>
+  <script src="/js/app.js"></script>
+</body>
+</html>

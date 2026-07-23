@@ -1,0 +1,167 @@
+[project]
+name = "pobi"
+dynamic = ["version"] 
+authors = [
+  { name="Yassine Bargach", email="yassine@straylabs.ai" },
+]
+description = "AI agent CLI for security research"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pobi-agent",
+    "pobi-prompts",
+    "pobi-eval",
+    "aiofiles>=24.1.0",
+    "aiohttp>=3.12.14",
+    "asgiref>=3.8.1",
+    "beautifulsoup4>=4.13.4",
+    "cssbeautifier>=1.15.4",
+    "docker>=7.1.0",
+    "dotenv>=0.9.9",
+    "google-genai>=1.18.0",
+    "httptools>=0.6.4",
+    "jsbeautifier>=1.15.4",
+    "logging>=0.4.9.6",
+    "lxml>=6.0.0",
+    "nest-asyncio>=1.6.0",
+    "numpy>=2.0.0,<2.3.0",
+    "playwright>=1.56.0",
+    "pydantic>=2.11.5",
+    "pyyaml>=6.0.2",
+    "readchar>=4.2.1",
+    "rich>=14.0.0",
+    "semantic-text-splitter>=0.27.0",
+    "sqlalchemy>=2.0.41",
+    "tenacity>=9.1.2",
+    "tiktoken>=0.9.0",
+    "tree-sitter-css>=0.23.2",
+    "tree-sitter-html>=0.23.2",
+    "tree-sitter-javascript>=0.23.1",
+    "tree-sitter-markdown>=0.5.1",
+    "tree-sitter-typescript>=0.23.2",
+    "typer>=0.15.4",
+    "jinja2>=3.1.6",
+    "typing-extensions>=4.15.0",
+    "python-frontmatter>=1.1.0",
+    "pyoxidizer>=0.24.0",
+    "openinference-instrumentation-instructor>=0.1.13",
+    "instructor>=1.15.1",
+    "arize-phoenix-client>=1.29.0",
+    "arize-phoenix-otel>=0.14.0",
+    "arize-phoenix-evals>=2.10.0",
+    "openinference-instrumentation>=0.1.44",
+    "openinference-instrumentation-litellm>=0.1.29",
+    "ripgrepy>=2.2.0",
+    # Web console dependencies — kept in main deps so `uv run pobi-web` works out of the box.
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "sse-starlette>=2.0",
+    # SOCKS proxy support for litellm/httpx LLM calls. httpx auto-detects socksio
+    # at runtime; without it, "test connection" fails with
+    # "Using SOCKS proxy, but the 'socksio' package is not installed".
+    "socksio>=1.0.0",
+]
+
+[project.optional-dependencies]
+# Retained for backward compatibility. All entries above are already installed
+# by default; `pip install pobi[web]` is a no-op now.
+web = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "sse-starlette>=2.0",
+]
+
+[project.scripts]
+pobi = "pobi:main"
+pobi-jsonrpc-server = "pobi.jsonrpc_server:main"
+pobi-web-console = "pobi.web_console.run:main"
+pobi-web = "pobi.web_console.run:main"
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
+    "flake8>=7.2.0",
+    "isort>=6.0.1",
+    "pytest>=8.3.5",
+    "pytest-cov>=6.1.1",
+    "pytest-mock>=3.14.1",
+]
+test = [
+    "pytest>=8.3.5",
+    "pytest-asyncio>=1.0.0",
+    "pytest-cov>=6.1.1",
+    "pytest-mock>=3.14.1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "src/pobi",
+    "pobi_agent/src/pobi_agent",
+    "pobi_prompts/src/pobi_prompts",
+    "pobi_eval/src/pobi_eval"
+]
+include = [
+    "pobi/data/*.json",
+    "pobi/data/memory/*.json",
+    "pobi_prompts/*.jinja2",
+    "pobi_prompts/tools/*.jinja2"
+]
+
+[build-system]
+requires = ["hatchling", "uv-dynamic-versioning"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
+
+[tool.hatch.envs.default.scripts]
+test = "pytest {args:tests}"
+lint = "flake8 {args:cli pobi_agent}"
+format = "black {args:cli pobi_agent}"
+format-check = "black --check {args:cli pobi_agent}"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+adopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--cov=src",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+]
+markers = [
+    "slow: marks tests as slow",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+    "asyncio: marks tests as async (deselect with '-m \"not asyncio\"')",
+]
+
+[tool.coverage.run]
+source = ["src/", "pobi_agent/src"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+]
+
+[tool.pyright]
+extraPaths = [
+    "pobi_agent/src",
+    "pobi_agent/src/pobi_agent"
+]
+
+
+[tool.uv.sources]
+pobi-agent = { workspace = true }
+pobi-prompts = { workspace = true }
+pobi-eval = { workspace = true }
+python-sandbox-client = { workspace = true }
