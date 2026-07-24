@@ -162,7 +162,7 @@ class AgentOutput(BaseModel):
 
 ### Before You Start
 
-1. Check existing [issues](https://github.com/xoxruns/pobi/issues) for related work
+1. Check existing [issues](https://github.com/Sexisnull/pobi/issues) for related work
 2. For significant changes, open an issue first to discuss your approach
 3. Ensure your contribution aligns with the project's security research focus
 
@@ -253,7 +253,7 @@ async def test_my_async_function():
 
 ## Questions or Issues?
 
-- Open an issue on [GitHub](https://github.com/xoxruns/pobi/issues)
+- Open an issue on [GitHub](https://github.com/Sexisnull/pobi/issues)
 - Check the README for usage documentation
 
 ## License
