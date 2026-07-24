@@ -7,12 +7,11 @@
 
 在完整的 XBOW 验证基准上，使用 **Kimi K2.5** 取得约 **80%** 通过率，全量跑一次端到端约 **US$122**；架构与模型解耦，支持任意可部署 LLM。
 
-![Pobi CLI](./assets/demo_gif.gif)
 
 > [!WARNING]
 > **持续开发中**：核心功能可用，接口和交互仍在打磨。欢迎在 [issues](https://github.com/Sexisnull/pobi/issues) 反馈。
 
-📄 [技术深入解读](https://xoxruns.medium.com/feedback-driven-iteration-and-fully-local-webapp-pentesting-ai-agent-achieving-78-on-xbow-199ef719bf01) · 💬 [Discord 社区](https://discord.gg/zwUVa3E7KT)
+📄 [技术深入解读](https://xoxruns.medium.com/feedback-driven-iteration-and-fully-local-webapp-pentesting-ai-agent-achieving-78-on-xbow-199ef719bf01)
 
 ---
 
