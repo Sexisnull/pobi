@@ -6,7 +6,7 @@
 **Autonomous pentesting agent using feedback-driven iteration**
 Achieves ~78% on XBOW benchmarks with fully local execution and model-agnostic architecture.
 
-📄 [Read Technical Deep Dive](https://xoxruns.medium.com/feedback-driven-iteration-and-fully-local-webapp-pentesting-ai-agent-achieving-78-on-xbow-199ef719bf01) | 📊 [Benchmark Results](https://github.com/xoxruns/deadend-cli/tree/main/benchmarks-results/xbow)
+📄 [Read Technical Deep Dive](https://xoxruns.medium.com/feedback-driven-iteration-and-fully-local-webapp-pentesting-ai-agent-achieving-78-on-xbow-199ef719bf01) | 📊 [Benchmark Results](https://github.com/xoxruns/pobi/tree/main/benchmarks-results/xbow)
 
 ---
 
@@ -65,7 +65,7 @@ The framework focuses on **intelligent security analysis** through:
 pipx install pobi
 
 # Or build from source
-git clone https://github.com/xoxruns/deadend-cli.git
+git clone https://github.com/xoxruns/pobi.git
 cd pobi
 uv sync && uv build
 ```
@@ -349,7 +349,7 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) for guidelines on how to contribute.
   author = {Yassine Bargach},
   title = {Pobi CLI: Feedback-Driven Autonomous Pentesting},
   year = {2026},
-  url = {https://github.com/xoxruns/deadend-cli}
+  url = {https://github.com/xoxruns/pobi}
 }
 ```
 
@@ -364,6 +364,6 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) for guidelines on how to contribute.
 ## Links
 
 📄 [Architecture Deep Dive](https://xoxruns.medium.com/feedback-driven-iteration-and-fully-local-webapp-pentesting-ai-agent-achieving-78-on-xbow-199ef719bf01)
-📊 [Benchmark Results](https://github.com/xoxruns/deadend-cli/tree/main/benchmarks-results/xbow)
-🐛 [Report Issues](https://github.com/xoxruns/deadend-cli/issues)
-⭐ [Star this repo](https://github.com/xoxruns/deadend-cli)
+📊 [Benchmark Results](https://github.com/xoxruns/pobi/tree/main/benchmarks-results/xbow)
+🐛 [Report Issues](https://github.com/xoxruns/pobi/issues)
+⭐ [Star this repo](https://github.com/xoxruns/pobi)

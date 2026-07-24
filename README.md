@@ -1,7 +1,7 @@
 # Pobi CLI
 
 [![Discord - Pobi CLI](https://img.shields.io/badge/Discord-Pobi%20CLI-5865F2?logo=discord&logoColor=white)](https://discord.gg/zwUVa3E7KT)
-[![Version](https://img.shields.io/badge/version-v0.2.0-green.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-v0.1-blue.svg)](VERSION)
 
 **Autonomous pentesting agent using feedback-driven iteration**
 Achieves **~80%** on the full XBOW validation benchmark with **Kimi K2.5** at **~US$122** total API cost for that end-to-end run, with a model-agnostic architecture that supports other deployable LLMs.
@@ -18,7 +18,7 @@ Achieves **~80%** on the full XBOW validation benchmark with **Kimi K2.5** at **
 > For discussions, research, and feature ideas, join the community Discord: [Pobi CLI Discord](https://discord.gg/zwUVa3E7KT).
 
 
-📄 [Read Technical Deep Dive](https://xoxruns.medium.com/feedback-driven-iteration-and-fully-local-webapp-pentesting-ai-agent-achieving-78-on-xbow-199ef719bf01) | 📊 [Benchmark Results (use VScode ANSI colors to view)](https://github.com/xoxruns/deadend-cli/tree/main/benchmarks-results/xbow)
+📄 [Read Technical Deep Dive](https://xoxruns.medium.com/feedback-driven-iteration-and-fully-local-webapp-pentesting-ai-agent-achieving-78-on-xbow-199ef719bf01) | 📊 [Benchmark Results (use VScode ANSI colors to view)](https://github.com/xoxruns/pobi/tree/main/benchmarks-results/xbow)
 
 ## Table of Contents
 
@@ -174,27 +174,28 @@ The console talks to the local daemon (`pobi-jsonrpc-server`). If the daemon isn
 
 This repository ships a Python-package installer (`install.sh`) that builds the project into an isolated virtual environment and links the console scripts onto your `PATH`. It installs the optional **Web Console** extra by default.
 
-**Option A — Install from this repository (recommended for development / self-hosting)**
+**Recommended — clone and install:**
 
 ```bash
-# from the repository root
+git clone https://github.com/Sexisnull/pobi.git
+cd pobi
 ./install.sh                  # -> ~/.cache/pobi/venv, scripts linked to ~/.local/bin
+./install.sh --launch         # install and immediately launch the Web Console
+```
+
+Variants:
+```bash
 ./install.sh --install-dir /opt/pobi   # custom virtualenv location
 ./install.sh --no-web                   # skip the Web Console extra
-./install.sh --launch                   # install and immediately launch the Web Console
 ```
 
 The installer will:
 - Create an isolated virtualenv (using `uv` if available, otherwise `python3 -m venv`)
 - Install the `pobi` package **with the `[web]` extra** (FastAPI + uvicorn + sse-starlette)
-- Symlink the console scripts (`pobi`, `pobi-web-console`, `pobi-jsonrpc-server`, `pobi-frontend`, `pobi-sandbox`) into `~/.local/bin`
+- Symlink the console scripts (`pobi`, `pobi-web-console`, `pobi-jsonrpc-server`, `pobi-web`, `pobi_eval`) into `~/.local/bin`
 - Remind you to add `~/.local/bin` to your `PATH` if it isn't already
 
-**Option B — Install the upstream release (pre-built binaries)**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/xoxruns/deadend-cli/main/install.sh | bash
-```
+**Alternative — uv only (no installer):** from the repo root run `uv sync --extra web`, then launch with `pobi-web-console`.
 
 ### First Run
 
@@ -218,25 +219,19 @@ export PATH="$HOME/.local/bin:$PATH"
 **Build from source**
 
 ```bash
-git clone https://github.com/xoxruns/deadend-cli.git
+git clone https://github.com/Sexisnull/pobi.git
 cd pobi
 uv sync --extra web     # add the Web Console (FastAPI + uvicorn + sse-starlette)
 ```
 
-**Run CLI**
+**Run the Web Console (recommended UI)**
 
-To run the maintained CLI for development:
-
-```bash
-cd cli/pobi
-bun run dev
-```
-
-To run the Web Console for development:
+This is the supported, release-ready interface — no extra tooling required:
 
 ```bash
 uv run --extra web pobi-web-console   # opens http://localhost:8000
 ```
+
 
 ---
 
@@ -443,11 +438,11 @@ The CLI interface reads from `settings.json` to determine which model to use by 
 
 ## Current Status & Roadmap
 
-### Stable (v0.2.0)
-- ✅ New architecture
+### Stable (v0.1)
+- ✅ Core ADaPT architecture with supervisor-subagent hierarchy
 - ✅ XBOW benchmark evaluation (~80% with Kimi K2.5, ~US$122 for the full suite)
-- ✅ Custom sandboxed tools
-- ✅ Multi-model support with liteLLM
+- ✅ Custom sandboxed tools (Playwright / Docker / WebAssembly)
+- ✅ Multi-model support via LiteLLM
 - ✅ Two-phase execution (recon + exploitation)
 - ✅ **CLI Redesign** with React/Ink interface
 - ✅ Interactive chat interface with command system
@@ -455,15 +450,16 @@ The CLI interface reads from `settings.json` to determine which model to use by 
 - ✅ Real-time event streaming and component health monitoring
 - ✅ Presetup wizard for configuration
 - ✅ **Web Console merged into the main package** (`pobi.web_console`, launched via `pobi-web-console`)
+- ✅ Authorization scope gate — hard abort on out-of-scope requests (`AgentExecutor` + every network tool)
+- ✅ Plan mode (`/plan`) — approve/prune the planner tree before execution
 
-### In Progress
+### In Progress (headed for v0.2)
 - 🚧 Codebase analysis support (white-box testing)
 - 🚧 Preset configuration workflows (API testing, web apps, auth bypass)
 - 🚧 Workflow automation (save/replay attack chains)
 - 🚧 Context optimization (reduce redundant tool calls)
 - 🚧 Secrets management improvements
 - 🚧 Report generation with templating (`/report`)
-- 🚧 Plan mode (review strategies before execution via `/plan`)
 
 
 ### Future roadmap
@@ -474,17 +470,10 @@ Milestones are ordered by **blocking-value first** (things without which the "au
 
 ---
 
-#### v0.3 — Harden what's already claimed (target: Q3 2026)
+#### v0.2 — Harden what's already claimed (target: Q3 2026)
 
-The 0.2 release proves the core loop works. Before adding surface area, close the gaps that make the current agent unsafe to point at anything but a lab.
+The 0.1 release proves the core loop works. Before adding surface area, close the gaps that make the current agent unsafe to point at anything but a lab.
 
-- **Authorization scope gate (blocking)** ✅ *implemented*
-  - Config schema: `scope: { domains: [...], cidrs: [...], out_of_scope: [...], max_qps, max_bytes }`.
-  - Enforced inside `AgentExecutor` and every network-touching tool (`pw_requester`, `browser`, `shell`, future `nmap`/`nuclei` wrappers). Any request outside scope → hard abort + logged evidence.
-  - Rationale: without this, "autonomous" is a legal and ethical liability, not a feature. This is the single change that separates "CTF toy" from "engagement-ready".
-- **Plan mode (`/plan`) finished** ✅ *implemented*
-  - Render the `Planner.TaskNode` tree *before* execution. Human can approve / prune / edit nodes. Approved plan is what the executor runs.
-  - Persist approved plans as JSON for reuse (feeds v0.4 workflow replay).
 - **Context compression pass**
   - Deduplicate repeated tool outputs inside `ContextEngine`; summarize long HTTP bodies before re-injection; keep raw blobs in RAG only.
   - Success metric: same XBOW pass rate at ≥30% fewer tokens.
@@ -494,9 +483,9 @@ The 0.2 release proves the core loop works. Before adding surface area, close th
 - **Test coverage on the core loop**
   - Unit tests for `ADaPTAgent` threshold branches (fail / replan / explore / validate), `ValidationGate` chaining, and scope-gate rejection paths. Small `assert`-based self-checks, no framework churn.
 
-#### v0.4 — Beyond web-only: real recon and exploitation (target: Q4 2026)
+#### v0.3 — Beyond web-only: real recon and exploitation (target: Q4 2026)
 
-This is the transition from *web-app agent* to *pentest agent*. Everything above v0.4 depends on this layer existing.
+This is the transition from *web-app agent* to *pentest agent*. Everything above v0.3 depends on this layer existing.
 
 - **Recon toolbelt (Docker-wrapped)**
   - `nmap` (service + version + NSE), `httpx` (HTTP probing), `naabu` (port scan), `ffuf`/`gobuster` (content discovery), `nuclei` (template scan), `subfinder`/`amass` (subdomain enum), `whatweb`/`wappalyzer` (fingerprint).
@@ -509,9 +498,9 @@ This is the transition from *web-app agent* to *pentest agent*. Everything above
 - **WAF / rate-limit adaptation**
   - Adaptive backoff in `pw_requester` on 429/403; pluggable proxy pool hook; payload mutator (case, encoding, comment insertion, delimiter swaps) so the exploitation loop doesn't die on trivial filtering.
 - **Credential and secrets store (per session)**
-  - Sqlite-backed vault for collected cookies, tokens, hashes, keys. Read/write scoped to a `session_id`; feeds v0.5 multi-target work.
+  - Sqlite-backed vault for collected cookies, tokens, hashes, keys. Read/write scoped to a `session_id`; feeds v0.4 multi-target work.
 
-#### v0.5 — Post-exploitation and multi-target (target: Q1 2027)
+#### v0.4 — Post-exploitation and multi-target (target: Q1 2027)
 
 Once the agent can land shells, it needs to do something with them.
 
@@ -525,7 +514,7 @@ Once the agent can land shells, it needs to do something with them.
 - **Cross-session knowledge base**
   - Persistent tables: `assets`, `findings`, `credentials`, `attack_paths`. Warm-start any future engagement against the same domain — the agent skips known territory.
 
-#### v0.6 — Open models and adversarial robustness (target: Q2 2027)
+#### v0.5 — Open models and adversarial robustness (target: Q2 2027)
 
 - **Open-weight parity**
   - Fine-tune Qwen / Llama on distilled traces from `benchmarks-results/xbow/` (successful runs only, with reward shaping on tool-call efficiency). Target ≥75% XBOW.
@@ -535,7 +524,7 @@ Once the agent can land shells, it needs to do something with them.
 - **Hybrid white-box testing**
   - Ingest source code via the existing `code_indexer` + a real AST layer (tree-sitter). Taint analysis output becomes prioritized input to `PlannerExploitAgent`.
 
-#### v0.7 — Productionization (target: H2 2027)
+#### v0.6 — Productionization (target: H2 2027)
 
 The agent is only useful if a team can operate it.
 
@@ -589,7 +578,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute.
   author = {Yassine Bargach},
   title = {Pobi CLI: Feedback-Driven Autonomous Pentesting},
   year = {2026},
-  url = {https://github.com/xoxruns/deadend-cli}
+  url = {https://github.com/xoxruns/pobi}
 }
 ```
 
@@ -616,8 +605,8 @@ Have questions, feedback, or want to collaborate?
 ## Links
 
 📄 [Architecture Deep Dive](https://xoxruns.medium.com/feedback-driven-iteration-and-fully-local-webapp-pentesting-ai-agent-achieving-78-on-xbow-199ef719bf01)
-📊 [Benchmark Results](https://github.com/xoxruns/deadend-cli/tree/main/benchmarks-results/xbow)
-🐛 [Report Issues](https://github.com/xoxruns/deadend-cli/issues)
-⭐ [Star this repo](https://github.com/xoxruns/deadend-cli)
+📊 [Benchmark Results](https://github.com/xoxruns/pobi/tree/main/benchmarks-results/xbow)
+🐛 [Report Issues](https://github.com/Sexisnull/pobi/issues)
+⭐ [Star this repo](https://github.com/Sexisnull/pobi)
 
 ![Pobi CLI](./assets/zTJJbo2XDi94T8ynIpozt.png)

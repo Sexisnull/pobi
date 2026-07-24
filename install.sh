@@ -111,25 +111,38 @@ VENV_PY="$INSTALL_DIR/bin/python"
 VENV_BIN="$INSTALL_DIR/bin"
 
 # ---- Install the package ----
-SPEC="."
-if [ "$WEB_EXTRA" = true ]; then
-  SPEC=".[web]"
-  info "==> Installing pobi with the [web] extra ..."
-else
-  info "==> Installing pobi (core only) ..."
-fi
-
+# IMPORTANT: install from the WORKSPACE ROOT with `uv sync` so uv resolves the
+# internal workspace packages (pobi-agent, pobi-prompts, pobi-eval,
+# python-sandbox-client) via the lockfile. `uv pip install ./pobi[web]` ignores
+# the [tool.uv.sources] workspace mappings and fails because those packages do
+# not exist on PyPI.
 if command -v uv >/dev/null 2>&1; then
-  (cd "$PACKAGE_DIR" && uv pip install --python "$VENV_PY" "$SPEC")
+  SYNC_ARGS=()
+  if [ "$WEB_EXTRA" = true ]; then
+    SYNC_ARGS+=(--extra web)
+    info "==> Installing pobi (workspace) with the [web] extra via uv sync ..."
+  else
+    info "==> Installing pobi (workspace, core only) via uv sync ..."
+  fi
+  (cd "$SCRIPT_DIR" && UV_PROJECT_ENVIRONMENT="$INSTALL_DIR" uv sync "${SYNC_ARGS[@]}")
 else
+  warn "uv not found; falling back to pip (builds each workspace member from source)."
   "$VENV_PY" -m pip install --quiet --upgrade pip
+  # Install workspace members in dependency order, then pobi (with [web] if requested).
+  for m in pobi/pobi_prompts pobi/simple-python-interpreter-sandbox pobi/pobi_agent pobi/pobi_eval; do
+    if [ -f "$SCRIPT_DIR/$m/pyproject.toml" ]; then
+      (cd "$SCRIPT_DIR/$m" && "$VENV_PY" -m pip install .)
+    fi
+  done
+  SPEC="."
+  [ "$WEB_EXTRA" = true ] && SPEC=".[web]"
   (cd "$PACKAGE_DIR" && "$VENV_PY" -m pip install "$SPEC")
 fi
 
 # ---- Symlink console scripts onto PATH ----
 info "==> Linking console scripts into $BIN_DIR"
 mkdir -p "$BIN_DIR"
-for cmd in pobi pobi-web-console pobi-jsonrpc-server pobi-frontend pobi-sandbox; do
+for cmd in pobi pobi-web-console pobi-jsonrpc-server pobi-web pobi_eval; do
   if [ -x "$VENV_BIN/$cmd" ]; then
     ln -sf "$VENV_BIN/$cmd" "$BIN_DIR/$cmd"
     info "    linked $cmd"

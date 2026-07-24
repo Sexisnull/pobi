@@ -80,7 +80,10 @@ def _resolve_model_selection(
     prov = provider or os.environ.get("POBI_DEFAULT_PROVIDER")
     mdl = model_name or os.environ.get("POBI_DEFAULT_MODEL")
     if prov is None:
-        for spec in getattr(config, "model_providers", []):
+        # Providers live on Config.providers (a ProvidersList); Config itself has
+        # no `model_providers` attribute, so reading it directly returns [] and
+        # every scan would wrongly report "No LLM provider configured".
+        for spec in getattr(config.providers, "model_providers", []):
             # EmbeddingSpec subclasses ModelSpec, so use type() not isinstance().
             if type(spec) is ModelSpec:
                 prov = spec.provider

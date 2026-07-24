@@ -141,17 +141,21 @@ class ProvidersList(BaseSettings):
         that the provider that's being added is not already in the list.
 
         """
-        if type_model is not None and vec_dim is not None and type_model == "embeddings":
+        # An embeddings-type model is a dedicated embedder spec and must NOT also
+        # be registered as a chat/LLM model (otherwise it shows up as a usable LLM
+        # and pollutes the model picker). Build only the EmbeddingSpec.
+        if type_model == "embeddings":
             embedding_model = EmbeddingSpec(
                 provider=provider,
                 model_name=model_name,
                 api_key=api_key,
                 base_url=base_url,
                 type_model=type_model,
-                vec_dim=vec_dim
+                vec_dim=vec_dim,
             )
             if embedding_model not in self.model_providers:
                 self.model_providers.append(embedding_model)
+            return embedding_model
 
         llm_model = ModelSpec(
             provider=provider,
@@ -161,6 +165,7 @@ class ProvidersList(BaseSettings):
         )
         if llm_model not in self.model_providers:
             self.model_providers.append(llm_model)
+        return llm_model
 
 
 class Config:
@@ -294,11 +299,15 @@ class Config:
             providers_section[key] = provider_spec.model_dump()
             config_file["provider"] = providers_section
 
+            MODEL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
             try:
                 with open(str(MODEL_CONFIG_PATH), "w", encoding="utf-8") as f:
                     json.dump(config_file, f, indent=2)
-            except OSError:
-                logger.info("Config file update failed.")
+                    f.write("\n")
+            except OSError as exc:
+                # Silent failure here was hiding real save errors from the UI.
+                logger.error("Failed to write %s: %s", MODEL_CONFIG_PATH, exc)
+                raise
 
     @classmethod
     def update_provider(
@@ -332,11 +341,61 @@ class Config:
         providers_section[key] = new_provider.model_dump()
         config_file["provider"] = providers_section
 
+        MODEL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         try:
             with open(str(MODEL_CONFIG_PATH), "w", encoding="utf-8") as f:
                 json.dump(config_file, f, indent=2)
-        except OSError:
-            logger.info("Config file update failed.")
+                f.write("\n")
+        except OSError as exc:
+            logger.error("Failed to write %s: %s", MODEL_CONFIG_PATH, exc)
+            raise
+
+    @classmethod
+    def remove_provider(cls, provider: str, model_name: str) -> bool:
+        """Remove a configured provider/model pair from ``config.json``.
+
+        Matches by the ``provider:model_name`` key first, then falls back to
+        scanning the stored entries for a matching ``provider``/``model_name``.
+        Returns ``True`` if a provider was removed, ``False`` if nothing matched.
+        """
+        config_file = load_config_json()
+        providers_section = config_file.get("provider", {})
+        if not isinstance(providers_section, dict):
+            return False
+
+        key = f"{provider}:{model_name}"
+        if key in providers_section:
+            del providers_section[key]
+        else:
+            found_key = None
+            for k, v in providers_section.items():
+                if isinstance(v, dict) and v.get("provider") == provider and v.get("model_name") == model_name:
+                    found_key = k
+                    break
+            if found_key is None:
+                return False
+            del providers_section[found_key]
+
+        config_file["provider"] = providers_section
+        MODEL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(str(MODEL_CONFIG_PATH), "w", encoding="utf-8") as f:
+                json.dump(config_file, f, indent=2)
+                f.write("\n")
+        except OSError as exc:
+            logger.error("Failed to write %s: %s", MODEL_CONFIG_PATH, exc)
+            raise
+
+        # Mirror the change in the in-memory providers list so that
+        # get_all_models() / the settings provider list reflect the deletion
+        # immediately, without waiting for a daemon restart.
+        if cls.providers is not None:
+            cls.providers.model_providers = [
+                spec for spec in cls.providers.model_providers
+                if not (getattr(spec, "provider", None) == provider
+                        and getattr(spec, "model_name", None) == model_name)
+            ]
+        return True
 
     @classmethod
     def all_model_providers(cls) -> ProvidersList:
@@ -362,6 +421,7 @@ class Config:
             MODEL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
             with open(str(MODEL_CONFIG_PATH), "w", encoding="utf-8") as f:
                 json.dump(config_file, f, indent=2)
+                f.write("\n")
         except OSError:
             logger.info("Could not persist local_agent_id to config file.")
         return new_id

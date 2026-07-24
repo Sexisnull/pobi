@@ -119,3 +119,6 @@ opencode.jsonc
 # pnpm debug logs
 .pnpm-debug.log
 *.pnpm-debug.log
+
+# Local dev artifacts (machine-local config/fingerprints/knowledge-graph)
+.ua/

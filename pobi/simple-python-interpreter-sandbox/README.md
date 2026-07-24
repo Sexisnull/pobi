@@ -6,7 +6,7 @@ A secure Python interpreter sandbox built with Deno and Pyodide that runs Python
 
 This tool provides a sandboxed Python interpreter that runs with deno runtime using WebAssembly. It's designed to safely execute Python code without giving access to the host system.
 
-This project was made to be used in the pentesting AI agent [pobi](https://github.com/xoxruns/deadend-cli)
+This project was made to be used in the pentesting AI agent [pobi](https://github.com/xoxruns/pobi)
 
 ## Security & Sandboxing
 

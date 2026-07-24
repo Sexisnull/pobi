@@ -513,11 +513,25 @@ async function safe(fn, fallback) { try { return await fn(); } catch (e) { retur
 /* ---------------- New Scan ---------------- */
 async function renderScan(view, params) {
   const presets = await safe(() => api("GET", "/api/presets"), []);
-  const models = await safe(() => api("GET", "/api/models"), { providers: {} });
+  const llmList = await safe(() => api("GET", "/api/llm/list"), { current: null, providers: [] });
   const llm = await safe(() => api("GET", "/api/llm"), { provider: "openai", model_name: "gpt-4o" });
+  const agents = await safe(() => api("GET", "/api/agents/available"), { agents: {} });
 
-  const provOpts = Object.entries(models.providers || {}).map(([p, ms]) =>
-    `<optgroup label="${p}">${ms.map((m) => `<option ${m === llm.model_name ? "selected" : ""}>${m}</option>`).join("")}</optgroup>`).join("");
+  // Group configured providers (from config.json) by provider name so the
+  // picker shows one optgroup per provider. Note: /api/llm/list returns plain
+  // {provider, model_name} strings — never the ModelInfo object — so we map
+  // over model_name directly.
+  const grouped = {};
+  for (const pr of (llmList.providers || [])) {
+    // Embedding (vector) models are used automatically by the RAG backend, not
+    // chosen per-scan, so keep them out of the LLM picker.
+    if (pr.type_model === "embeddings") continue;
+    (grouped[pr.provider] = grouped[pr.provider] || []).push(pr.model_name);
+  }
+  const provOpts = Object.entries(grouped).map(([p, ms]) =>
+    `<optgroup label="${p}">${ms.map((m) => `<option value="${p}::${m}" ${p === llm.provider && m === llm.model_name ? "selected" : ""}>${p} / ${m}</option>`).join("")}</optgroup>`).join("");
+  const agentOpts = Object.entries(agents.agents || {}).map(([k, v]) =>
+    `<option value="${k}" ${k === "router_agent" ? "selected" : ""}>${k} — ${v}</option>`).join("");
 
   view.innerHTML = `
     <h1 class="page">${t("New Scan")}</h1>
@@ -531,7 +545,7 @@ async function renderScan(view, params) {
       <h2>${t("3 · Agent & model")}</h2>
       <div class="row">
         <label class="field" style="flex:1"><span>${t("Agent strategy")}</span>
-          <select id="fAgent"><option value="router_agent" selected>router_agent (planner + workers)</option></select></label>
+          <select id="fAgent">${agentOpts}</select></label>
         <label class="field" style="flex:1"><span>${t("LLM model")}</span><select id="fModel">${provOpts || `<option>${llm.model_name}</option>`}</select></label>
       </div>
       ${params && params.plan ? `<div class="plan-chip"><span class="k">已挂载作战计划</span> <span class="mono">${esc(params.plan)}</span> <button class="btn ghost sm" id="clearPlan">清除</button></div>` : ""}
@@ -553,6 +567,7 @@ async function renderScan(view, params) {
   let selectedPreset = null;
   pbox.innerHTML = presets.map((p) => `
     <div class="preset" data-id="${p.id}">
+      <span class="pcheck" aria-hidden="true">✓</span>
       <div class="pname"><span style="color:${p.color}">●</span>${p.name}</div>
       <div class="pdesc">${p.description}</div>
     </div>`).join("");
@@ -588,19 +603,36 @@ async function renderScan(view, params) {
 
     btn.textContent = t("Launching…");
     try {
-      // approval mode
-      await api("POST", "/api/approval-mode", { enabled: approval });
-      const ag = await api("POST", "/api/agents", { target, provider: llm.provider, model_name: document.getElementById("fModel").value });
-      const agentId = ag.agent_id;
-      const scanPayload = {
-        agent_id: agentId, target, prompt, max_depth: depthV,
-        validation_config: { min_confidence: confV },
-      };
-      if (params && params.plan) scanPayload.plan_id = params.plan;
-      const scan = await api("POST", "/api/scans", scanPayload);
-      location.hash = `#monitor?session=${encodeURIComponent(scan.session_id)}&agent=${encodeURIComponent(agentId)}`;
+    // approval mode
+    await api("POST", "/api/approval-mode", { enabled: approval });
+    // Model option value is "provider::model"; fall back to the active provider
+    // if the select only has the single placeholder option.
+    const mv = document.getElementById("fModel").value || "";
+    const [mProv, mName] = mv.includes("::") ? mv.split("::") : [null, mv];
+    const agentType = document.getElementById("fAgent").value;
+    const ag = await api("POST", "/api/agents", {
+      target,
+      agent_type: agentType,
+      provider: mProv || llm.provider,
+      model_name: mName || mv,
+    });
+    if (!ag || ag.status !== "ok") {
+      throw new Error((ag && ag.reason) ? ag.reason : t("Agent could not be created"));
+    }
+    const agentId = ag.agent_id;
+    if (!agentId) throw new Error(t("Agent id missing from response"));
+    // Mirror the original deadend-cli flow: after instantiating the agent,
+    // crawl + embed the target into the RAG store before launching the scan.
+    await api("POST", `/api/agents/${encodeURIComponent(agentId)}/embed`, { target });
+    const scanPayload = {
+      agent_id: agentId, target, prompt, max_depth: depthV,
+      validation_config: { min_confidence: confV },
+    };
+    if (params && params.plan) scanPayload.plan_id = params.plan;
+    const scan = await api("POST", "/api/scans", scanPayload);
+    location.hash = `#monitor?session=${encodeURIComponent(scan.session_id)}&agent=${encodeURIComponent(agentId)}`;
     } catch (e) {
-      alert(t("Launch failed: ") + e.message);
+      toast(t("Launch failed: ") + e.message, "bad");
       btn.disabled = false; btn.textContent = t("Launch scan ▶");
     }
   };
@@ -688,6 +720,117 @@ function summarize(ev) {
   return esc(JSON.stringify(d).slice(0, 80));
 }
 function esc(s) { return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+
+function renderLlmConfigured(list) {
+  // LLM (semantic) panel: show only chat/completion models, never the
+  // embedding (vector) models — those live in their own parallel panel.
+  const providers = ((list && list.providers) || []).filter(p => p.type_model !== "embeddings");
+  const current = list && list.current;
+  if (!providers.length) {
+    return `<p class="muted" style="font-size:12px;margin:0">${t("No LLM providers configured yet. Fill the fields below and click Save.")}</p>`;
+  }
+    const rows = providers.map((p) => {
+    const active = p.provider === current;
+    const badge = active
+      ? `<span class="badge ok" style="margin-left:6px">${t("active")}</span>`
+      : `<button class="btn" data-llm-use data-p="${esc(p.provider)}" data-m="${esc(p.model_name)}" style="padding:2px 8px;font-size:12px">${t("Use")}</button>`;
+    const key = p.has_key ? `<span class="muted" style="font-size:11px">🔑 saved</span>`
+                          : `<span class="badge warn" style="font-size:11px">no key</span>`;
+    const url = p.base_url ? `<span class="muted mono" style="font-size:11px">${esc(p.base_url)}</span>` : "";
+    const del = `<button class="btn danger" data-llm-del data-p="${esc(p.provider)}" data-m="${esc(p.model_name)}" style="padding:2px 8px;font-size:12px" title="${t("Delete this provider")}">🗑 ${t("Delete")}</button>`;
+    return `<tr>
+      <td class="mono">${esc(p.provider)}${badge}</td>
+      <td class="mono">${esc(p.model_name)}</td>
+      <td>${key}</td>
+      <td>${url}</td>
+      <td>${del}</td>
+    </tr>`;
+  }).join("");
+  return `<table class="tbl" style="width:100%;font-size:13px">
+    <thead><tr><th>${t("Provider")}</th><th>${t("Model")}</th><th>${t("Key")}</th><th>${t("Base URL")}</th><th>${t("Actions")}</th></tr></thead>
+    <tbody data-llm-list>${rows}</tbody>
+  </table>`;
+}
+
+function renderEmbeddingConfigured(list) {
+  // Embedding (vector) panel: show only models registered with type_model=embeddings.
+  const providers = ((list && list.providers) || []).filter(p => p.type_model === "embeddings");
+  if (!providers.length) {
+    return `<p class="muted" style="font-size:12px;margin:0">${t("No embedding model configured yet. Add one below — it is required for code retrieval.")}</p>`;
+  }
+  const rows = providers.map((p) => {
+    const dim = p.vec_dim ? `<span class="muted mono" style="font-size:11px">dim ${esc(String(p.vec_dim))}</span>` : "";
+    const key = p.has_key ? `<span class="muted" style="font-size:11px">🔑 saved</span>`
+                          : `<span class="badge warn" style="font-size:11px">no key</span>`;
+    const url = p.base_url ? `<span class="muted mono" style="font-size:11px">${esc(p.base_url)}</span>` : "";
+    const del = `<button class="btn danger" data-emb-del data-p="${esc(p.provider)}" data-m="${esc(p.model_name)}" style="padding:2px 8px;font-size:12px" title="${t("Delete this embedding model")}">🗑 ${t("Delete")}</button>`;
+    return `<tr>
+      <td class="mono">${esc(p.provider)}</td>
+      <td class="mono">${esc(p.model_name)}</td>
+      <td>${key}</td>
+      <td>${dim} ${url}</td>
+      <td>${del}</td>
+    </tr>`;
+  }).join("");
+  return `<table class="tbl" style="width:100%;font-size:13px">
+    <thead><tr><th>${t("Provider")}</th><th>${t("Model")}</th><th>${t("Key")}</th><th>${t("Dim / Base URL")}</th><th>${t("Actions")}</th></tr></thead>
+    <tbody data-emb-list>${rows}</tbody>
+  </table>`;
+}
+
+// Delegated click on "Use" — switches active LLM provider without re-typing creds.
+document.addEventListener("click", async (ev) => {
+  const btn = ev.target.closest && ev.target.closest("[data-llm-use]");
+  if (!btn) return;
+  const provider = btn.getAttribute("data-p");
+  const model = btn.getAttribute("data-m");
+  if (!provider || !model) return;
+  try {
+    await api("POST", "/api/llm", { provider, model_name: model });
+    toast(t("Switched to ") + provider + "/" + model);
+    const fresh = await safe(() => api("GET", "/api/llm/list"), null);
+    if (fresh) {
+      const box = document.getElementById("llmConfigured");
+      if (box) box.innerHTML = renderLlmConfigured(fresh);
+    }
+  } catch (e) {
+    toast(t("Switch failed: ") + (e && e.message ? e.message : t("unknown error")));
+  }
+});
+
+// Delegated click on "Delete" — removes a configured provider (LLM or embedding)
+// from config.json. Identified by provider+model (data-p/data-m) rather than a
+// list index, so the two panels can safely show filtered subsets.
+document.addEventListener("click", async (ev) => {
+  const del = ev.target.closest && ev.target.closest("[data-llm-del],[data-emb-del]");
+  if (!del) return;
+  const provider = del.getAttribute("data-p");
+  const model = del.getAttribute("data-m");
+  if (!provider || !model) return;
+  const isLlm = del.hasAttribute("data-llm-del");
+  const list = await safe(() => api("GET", "/api/llm/list"), null);
+  // Forbid deleting the currently-active LLM provider to avoid leaving the daemon
+  // with no usable LLM. Embedding models have no "active" concept.
+  if (isLlm && list && list.current === provider) {
+    toast(t("Cannot delete the active provider — switch to another first."));
+    return;
+  }
+  const label = isLlm ? t("Delete LLM provider ") : t("Delete embedding model ");
+  if (!confirm(label + provider + "/" + model + "?")) return;
+  try {
+    await api("DELETE", `/api/llm?provider=${encodeURIComponent(provider)}&model_name=${encodeURIComponent(model)}`);
+    toast(t("Deleted ") + provider + "/" + model);
+    const fresh = await safe(() => api("GET", "/api/llm/list"), null);
+    if (fresh) {
+      const llmBox = document.getElementById("llmConfigured");
+      if (llmBox) llmBox.innerHTML = renderLlmConfigured(fresh);
+      const embBox = document.getElementById("embConfigured");
+      if (embBox) embBox.innerHTML = renderEmbeddingConfigured(fresh);
+    }
+  } catch (e) {
+    toast(t("Delete failed: ") + (e && e.message ? e.message : t("unknown error")));
+  }
+});
 
 function updateConfidenceBar() {
   const fill = document.getElementById("confFill");
@@ -784,6 +927,7 @@ async function renderSettings(view) {
   const pf = await safe(() => api("GET", "/api/preflight"), { checks: [], setup_needed: false });
   const val = await safe(() => api("GET", "/api/validation"), { min_confidence: 0.6, max_retries: 3, require_validation_token: true, strict_mode: false });
   const llm = await safe(() => api("GET", "/api/llm"), { provider: "openai", model_name: "gpt-4o" });
+  const llmList = await safe(() => api("GET", "/api/llm/list"), { current: llm.provider, providers: [] });
   const am = await safe(() => api("GET", "/api/approval-mode"), { approval_mode: false });
   state.approvalMode = !!am.approval_mode;
 
@@ -806,8 +950,9 @@ async function renderSettings(view) {
         <button class="btn primary" id="saveVal">${t("Save validation")}</button>
       </div>
       <div class="panel"><h2>${t("LLM provider")}</h2>
-        <label class="field"><span>${t("Provider")}</span><input id="llmP" class="mono" value="${llm.provider || ""}"></label>
-        <label class="field"><span>${t("Model name")}</span><input id="llmM" class="mono" value="${llm.model_name || llm.model || ""}"></label>
+        <div id="llmConfigured" style="margin-bottom:12px">${renderLlmConfigured(llmList)}</div>
+        <label class="field"><span>${t("Provider")}</span><input id="llmP" class="mono" value="${esc(llm.provider || "")}"></label>
+        <label class="field"><span>${t("Model name")}</span><input id="llmM" class="mono" value="${esc(llm.model_name || llm.model || "")}"></label>
         <label class="field"><span>${t("API key")}</span><input id="llmK" type="password" class="mono" placeholder="sk-... (leave blank to reuse saved)"></label>
         <label class="field"><span>${t("Base URL (optional)")}</span><input id="llmB" class="mono" placeholder="https://..."></label>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -815,6 +960,20 @@ async function renderSettings(view) {
           <button class="btn primary" id="saveLlm">${t("Save LLM")}</button>
         </div>
         <div id="llmTestResult" class="pf-check" style="display:none;margin-top:12px"></div>
+      </div>
+      <div class="panel"><h2>${t("Embedding model (RAG vector)")}</h2>
+        <p class="muted" style="font-size:12px;margin-top:0">${t("Builds & queries the code index for retrieval-augmented scanning. One vector model is required.")}</p>
+        <div id="embConfigured" style="margin-bottom:12px">${renderEmbeddingConfigured(llmList)}</div>
+        <label class="field"><span>${t("Provider")}</span><input id="embP" class="mono" value="openai"></label>
+        <label class="field"><span>${t("Model name")}</span><input id="embM" class="mono" placeholder="e.g. text-embedding-3-small"></label>
+        <label class="field"><span>${t("API key")}</span><input id="embK" type="password" class="mono" placeholder="sk-... (leave blank to reuse saved)"></label>
+        <label class="field"><span>${t("Base URL (optional)")}</span><input id="embB" class="mono" placeholder="https://..."></label>
+        <label class="field"><span>${t("Vector dimension")}</span><input id="embD" class="mono" type="number" placeholder="e.g. 1024"></label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn" id="testEmb">${t("Test connection")}</button>
+          <button class="btn primary" id="saveEmb">${t("Save embedding")}</button>
+        </div>
+        <div id="embTestResult" class="pf-check" style="display:none;margin-top:12px"></div>
       </div>
       <div class="panel"><h2>${t("Approval mode")}</h2>
         <p class="muted" style="font-size:12px">${t("When enabled, intrusive agent actions require operator sign-off via the Monitor.")}</p>
@@ -837,15 +996,28 @@ async function renderSettings(view) {
   };
   document.getElementById("saveLlm").onclick = async () => {
     const payload = {
-      provider: document.getElementById("llmP").value,
-      model_name: document.getElementById("llmM").value,
+      provider: document.getElementById("llmP").value.trim(),
+      model_name: document.getElementById("llmM").value.trim(),
     };
+    if (!payload.provider || !payload.model_name) {
+      toast(t("Provider and model name are required"));
+      return;
+    }
     const apiKey = document.getElementById("llmK").value;
     const baseUrl = document.getElementById("llmB").value;
     if (apiKey) payload.api_key = apiKey;
     if (baseUrl) payload.base_url = baseUrl;
-    await safe(() => api("POST", "/api/llm", payload), null);
-    toast(t("LLM provider saved"));
+    try {
+      await api("POST", "/api/llm", payload);
+      toast(t("LLM provider saved"));
+      // Re-fetch and re-render the configured list so the user sees their save landed.
+      const fresh = await safe(() => api("GET", "/api/llm/list"), null);
+      if (fresh) document.getElementById("llmConfigured").innerHTML = renderLlmConfigured(fresh);
+      // Clear the key field to make the "leave blank to reuse" hint work naturally next time.
+      document.getElementById("llmK").value = "";
+    } catch (e) {
+      toast(t("Save failed: ") + (e && e.message ? e.message : t("unknown error")));
+    }
   };
   document.getElementById("testLlm").onclick = async () => {
     const box = document.getElementById("llmTestResult");
@@ -862,6 +1034,64 @@ async function renderSettings(view) {
     if (r.ok) {
       box.className = "pf-check pf-ok";
       box.innerHTML = `✅ ${t("Connected")} — ${r.detail || ""} <span class="muted">(${r.latency_ms}ms)</span>`;
+    } else {
+      const safeDetail = String(r.detail || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      box.className = "pf-check pf-error";
+      box.innerHTML = `❌ ${t("Failed")} [${r.error_type || "err"}] — <span class="mono">${safeDetail}</span>`;
+    }
+  };
+  document.getElementById("saveEmb").onclick = async () => {
+    const provider = document.getElementById("embP").value.trim();
+    const modelName = document.getElementById("embM").value.trim();
+    const vecDim = document.getElementById("embD").value.trim();
+    if (!provider || !modelName) {
+      toast(t("Provider and model name are required"));
+      return;
+    }
+    if (!vecDim) {
+      toast(t("Vector dimension is required for embedding models"));
+      return;
+    }
+    const payload = {
+      provider,
+      model_name: modelName,
+      type_model: "embeddings",
+      vec_dim: parseInt(vecDim, 10),
+    };
+    const apiKey = document.getElementById("embK").value;
+    const baseUrl = document.getElementById("embB").value;
+    if (apiKey) payload.api_key = apiKey;
+    if (baseUrl) payload.base_url = baseUrl;
+    try {
+      await api("POST", "/api/llm", payload);
+      toast(t("Embedding model saved"));
+      const fresh = await safe(() => api("GET", "/api/llm/list"), null);
+      if (fresh) {
+        const embBox = document.getElementById("embConfigured");
+        if (embBox) embBox.innerHTML = renderEmbeddingConfigured(fresh);
+      }
+      document.getElementById("embK").value = "";
+    } catch (e) {
+      toast(t("Save failed: ") + (e && e.message ? e.message : t("unknown error")));
+    }
+  };
+  document.getElementById("testEmb").onclick = async () => {
+    const box = document.getElementById("embTestResult");
+    box.style.display = "block";
+    box.className = "pf-check pf-warn";
+    box.innerHTML = `⏳ ${t("Testing...")}`;
+    const payload = {
+      provider: document.getElementById("embP").value,
+      model_name: document.getElementById("embM").value,
+      type_model: "embeddings",
+      api_key: document.getElementById("embK").value || null,
+      base_url: document.getElementById("embB").value || null,
+    };
+    const r = await safe(() => api("POST", "/api/llm/test", payload), { ok: false, error_type: "network", detail: "request failed" });
+    if (r.ok) {
+      box.className = "pf-check pf-ok";
+      const dim = r.vec_dim ? ` (dim ${r.vec_dim})` : "";
+      box.innerHTML = `✅ ${t("Connected")} — ${r.detail || ""}${dim} <span class="muted">(${r.latency_ms}ms)</span>`;
     } else {
       const safeDetail = String(r.detail || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
       box.className = "pf-check pf-error";

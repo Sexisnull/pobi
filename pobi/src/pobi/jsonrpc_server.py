@@ -23,6 +23,7 @@ from pobi_agent.tools.tool_wrappers import (
     is_approval_mode_enabled
 )
 from pobi_agent.constants import REUSABLE_CREDENTIALS_FILE, ROOT_DEADEND_PATH, DEADEND_VALIDATION_CONFIG_PATH
+from pobi_agent.config.settings import Config
 from pobi.cli_logging import logger
 from pobi.component_manager import ComponentManager
 from pobi.jsonrpc.rpc_server import RPCServer
@@ -613,6 +614,14 @@ def main(
         component_manager: ComponentManager
     ) -> Dict[str, Any]:
         """List all available and configured models in the config.json."""
+        # The registry is built lazily (it's in-memory and lost on restart). If a
+        # provider was saved to config.json, bring the registry up on demand so
+        # the New Scan model picker isn't stuck empty.
+        if component_manager.model_registry is None:
+            if component_manager.config is None:
+                await component_manager.init_config()
+            if component_manager.config is not None and component_manager.model_registry is None:
+                await component_manager.init_model_registry()
         result = component_manager.get_all_models()
         return result
     @server.add_method("get_llm_provider")
@@ -622,8 +631,17 @@ def main(
         component_manager: ComponentManager
     ) -> Dict[str, Any]:
         """Get the current LLM provider and model name."""
+        # The registry is built lazily (it's in-memory and lost on restart). Bring
+        # it up from config.json so the current model is reported correctly even
+        # on a freshly started daemon (otherwise get_model raises and we return
+        # model=None, which makes the New Scan picker fall back to gpt-4o).
+        if component_manager.model_registry is None:
+            if component_manager.config is None:
+                await component_manager.init_config()
+            if component_manager.config is not None and component_manager.model_registry is None:
+                await component_manager.init_model_registry()
         provider = component_manager.get_llm_provider()
-        
+
         # Get the model spec to extract model name
         try:
             model_spec = component_manager.get_model(provider=provider)
@@ -640,6 +658,94 @@ def main(
             }
     # TODO: The set provider here, only sets up the provider and not the model itself, or the
     # API KEY nor the base url if needed, this is a problem
+    @server.add_method("list_llm_providers")
+    async def list_llm_providers(
+        _request_id: Any,
+        _params: Dict[str, Any],
+        component_manager: ComponentManager
+    ) -> Dict[str, Any]:
+        """List every configured provider/model pair (api_key redacted).
+
+        Returns: {current: str, providers: [{provider, model_name, base_url, has_key}, ...]}
+        """
+        current = component_manager.get_llm_provider()
+        providers_out: list[dict[str, Any]] = []
+        # Lazily build the registry from config.json so saved providers show up
+        # here even after a daemon restart.
+        if component_manager.model_registry is None:
+            if component_manager.config is None:
+                await component_manager.init_config()
+            if component_manager.config is not None and component_manager.model_registry is None:
+                await component_manager.init_model_registry()
+        registry = component_manager.model_registry
+        if registry is not None:
+            for provider_name, specs in registry.get_all_models().items():
+                for info in specs:
+                    # ModelInfo doesn't carry api_key/base_url — pull from the raw spec.
+                    try:
+                        spec = registry.get_model(
+                            provider=provider_name, model_name=info.model_name
+                        )
+                    except (RuntimeError, ValueError):
+                        spec = None
+                    providers_out.append({
+                        "provider": provider_name,
+                        "model_name": info.model_name,
+                        "base_url": getattr(spec, "base_url", None) if spec else None,
+                        "has_key": bool(getattr(spec, "api_key", None)) if spec else False,
+                        "type_model": getattr(spec, "type_model", None) if spec else None,
+                        "vec_dim": getattr(spec, "vec_dim", None) if spec else None,
+                    })
+
+        # Embedding (vector) models live in a separate EmbedderClient, not in
+        # self._models, so they never appear in the registry loop above. Surface
+        # them here (tagged type_model="embeddings") so the settings UI can list
+        # and manage them alongside the LLM providers.
+        try:
+            for spec in Config.providers.model_providers:
+                if getattr(spec, "type_model", None) == "embeddings":
+                    providers_out.append({
+                        "provider": getattr(spec, "provider", None),
+                        "model_name": getattr(spec, "model_name", None),
+                        "base_url": getattr(spec, "base_url", None),
+                        "has_key": bool(getattr(spec, "api_key", None)),
+                        "type_model": "embeddings",
+                        "vec_dim": getattr(spec, "vec_dim", None),
+                    })
+        except Exception as exc:
+            logger.warning("Embedding provider read failed: %s", exc)
+
+        # Fallback: the in-memory registry is lost on daemon restart until a model
+        # is instantiated. If it came back empty despite config.json having
+        # providers, read them straight from config so the New Scan picker still
+        # lists the user's saved models.
+        if not providers_out:
+            try:
+                for spec in Config.providers.model_providers:
+                    providers_out.append({
+                        "provider": getattr(spec, "provider", None),
+                        "model_name": getattr(spec, "model_name", None),
+                        "base_url": getattr(spec, "base_url", None),
+                        "has_key": bool(getattr(spec, "api_key", None)),
+                        "type_model": getattr(spec, "type_model", None),
+                        "vec_dim": getattr(spec, "vec_dim", None),
+                    })
+            except Exception as exc:
+                logger.warning("Fallback config provider read failed: %s", exc)
+
+        # De-duplicate in case both sources contributed the same provider/model.
+        seen: set[tuple[Any, Any]] = set()
+        deduped: list[dict[str, Any]] = []
+        for p in providers_out:
+            key = (p.get("provider"), p.get("model_name"))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(p)
+        providers_out = deduped
+
+        return {"current": current, "providers": providers_out}
+
     @server.add_method("set_llm_provider")
     async def set_llm_provider(
         _request_id: Any,
@@ -677,8 +783,17 @@ def main(
         Returns:
             Dictionary with status and provider information
         """
+        # The daemon does not auto-initialize on startup, so a plain "Save LLM"
+        # click from the UI may hit an uninitialized config/model_registry.
+        # Bring them up on demand instead of erroring out with a 500.
         if component_manager.config is None:
-            raise RuntimeError("Configuration not initialized")
+            result = await component_manager.init_config()
+            if not result.success:
+                raise RuntimeError(f"Failed to initialize configuration: {result.message}")
+        if component_manager.model_registry is None:
+            result = await component_manager.init_model_registry()
+            if not result.success:
+                raise RuntimeError(f"Failed to initialize model registry: {result.message}")
 
         provider = params.get("provider")
         model_name = params.get("model_name")
@@ -689,6 +804,21 @@ def main(
 
         if not provider or not model_name:
             raise ValueError("provider and model_name are required")
+
+        # Reuse previously-saved api_key / base_url when the caller omits them.
+        # This lets the UI's "Save LLM" click work without re-typing the key.
+        if api_key is None or base_url is None:
+            try:
+                existing = component_manager.get_model(
+                    provider=provider, model_name=model_name
+                )
+                if api_key is None:
+                    api_key = getattr(existing, "api_key", None)
+                if base_url is None:
+                    base_url = getattr(existing, "base_url", None)
+            except (RuntimeError, ValueError):
+                # No existing spec — that's fine on first save.
+                pass
 
         # Add provider to the config and save to config.json
         component_manager.add_model_provider(
@@ -715,6 +845,40 @@ def main(
             "type_model": type_model or None
         }
 
+
+    @server.add_method("delete_model")
+    async def delete_model(
+        _request_id: Any,
+        params: Dict[str, Any],
+        component_manager: ComponentManager
+    ) -> Dict[str, Any]:
+        """Remove a configured model provider from config.json.
+
+        Args:
+            provider: provider name (e.g. ``openai``)
+            model_name: model name (e.g. ``gpt-4o``)
+        """
+        provider = params.get("provider")
+        model_name = params.get("model_name")
+        if not provider or not model_name:
+            raise RuntimeError("provider and model_name are required")
+
+        # Ensure config is loaded so remove_provider reads the latest disk state.
+        if component_manager.config is None:
+            result = await component_manager.init_config()
+            if not result.success:
+                raise RuntimeError(f"Failed to initialize configuration: {result.message}")
+
+        removed = Config.remove_provider(provider, model_name)
+
+        # Drop the in-memory registry cache so the next model list re-reads disk.
+        component_manager.model_registry = None
+
+        return {
+            "success": bool(removed),
+            "provider": provider,
+            "model_name": model_name,
+        }
 
 
     # ==========================================
@@ -825,43 +989,13 @@ def main(
     # ==========================================
     # Agent methods methods
     # ==========================================
-    @server.add_method("instantiate_agent")
-    async def instantiate_agent(
-        _request_id: Any,
-        params: Dict[str, Any],
-        component_manager: ComponentManager,
-        pobi_agent_refs: Dict[str, DeadEndAgent],
-        task_registry: TaskRegistry,
-    ) -> Dict[str, Any]:
-        # Validate parameters first
-        target = params.get("target")
-        if not target:
-            return {
-                "status": "failed",
-                "reason": "Must supply a target"
-            }
+    def _build_available_agents() -> Dict[str, str]:
+        """Single source of truth for the agent roster shown in the UI.
 
-        # Get provider and model from params, or use current defaults
-        provider = params.get("provider")
-        model_name = params.get("model_name")
-        workspace_root = params.get("workspace_root")
-        proxy_url = params.get("proxy_url")
-
-        # Get the model spec (will use current provider/model if not specified)
-        logger.info("model and provider %s %s", provider, model_name)
-        try:
-            model = component_manager.get_model(provider=provider, model_name=model_name)
-        except (RuntimeError, ValueError) as e:
-            return {
-                "status": "failed",
-                "reason": f"Failed to get model: {str(e)}"
-            }
-
-        agent_id = uuid.uuid4()
-        runtime_session_id = uuid.uuid4()
-        embedding_session_id = deterministic_session_id(target)
-
-        available_agents = {
+        The shell agent is dropped when Docker + Kali are unavailable so the
+        planner never schedules steps that crash on sandbox exec.
+        """
+        agents: Dict[str, str] = {
             "requester": (
                 "Agent specialized in quick targeted HTTP testing. "
                 "Best default for simple requests, auth checks, individual endpoints, "
@@ -893,20 +1027,94 @@ def main(
             ),
         }
         # Capability degradation: without Docker + Kali the shell agent cannot
-        # run its tools, and leaving it in the roster tricks the planner into
-        # scheduling steps that will crash on sandbox exec. Drop it here so the
-        # LLM never sees it as an option.
+        # run its tools. Drop it here so the LLM never sees it as an option.
         try:
             from pobi.web_console.preflight import _check_docker, _check_kali_image
             docker_ok = _check_docker().get("status") == "ok"
             kali_ok = _check_kali_image().get("status") == "ok"
             if not (docker_ok and kali_ok):
-                available_agents.pop("shell", None)
+                agents.pop("shell", None)
                 logger.info(
                     "shell agent disabled (docker_ok=%s kali_ok=%s)", docker_ok, kali_ok
                 )
         except Exception as exc:
             logger.warning("preflight capability check failed: %s", exc)
+        return agents
+
+    @server.add_method("get_available_agents")
+    async def get_available_agents(
+        _request_id: Any,
+        _params: Dict[str, Any],
+        component_manager: ComponentManager,
+    ) -> Dict[str, Any]:
+        """Expose the agent roster to the web console (New Scan strategy picker)."""
+        return {"agents": _build_available_agents()}
+
+    @server.add_method("instantiate_agent")
+    async def instantiate_agent(
+        _request_id: Any,
+        params: Dict[str, Any],
+        component_manager: ComponentManager,
+        pobi_agent_refs: Dict[str, DeadEndAgent],
+        task_registry: TaskRegistry,
+    ) -> Dict[str, Any]:
+        # Validate parameters first
+        target = params.get("target")
+        if not target:
+            return {
+                "status": "failed",
+                "reason": "Must supply a target"
+            }
+
+        # config and model_registry are in-memory and lost on daemon restart.
+        # Without this, a freshly restarted daemon fails to resolve the model and
+        # returns status="failed" (no agent_id), which the web console surfaced
+        # as a confusing "agent_id required" 400 when launching a scan.
+        if component_manager.config is None:
+            result = await component_manager.init_config()
+            if not result.success:
+                return {
+                    "status": "failed",
+                    "reason": f"Failed to initialize configuration: {result.message}"
+                }
+        if component_manager.model_registry is None:
+            result = await component_manager.init_model_registry()
+            if not result.success:
+                return {
+                    "status": "failed",
+                    "reason": f"Failed to initialize model registry: {result.message}"
+                }
+
+        # Get provider and model from params, or use current defaults
+        provider = params.get("provider")
+        model_name = params.get("model_name")
+        workspace_root = params.get("workspace_root")
+        proxy_url = params.get("proxy_url")
+
+        # Get the model spec (will use current provider/model if not specified)
+        logger.info("model and provider %s %s", provider, model_name)
+        try:
+            model = component_manager.get_model(provider=provider, model_name=model_name)
+        except (RuntimeError, ValueError) as e:
+            return {
+                "status": "failed",
+                "reason": f"Failed to get model: {str(e)}"
+            }
+
+        agent_id = uuid.uuid4()
+        runtime_session_id = uuid.uuid4()
+        embedding_session_id = deterministic_session_id(target)
+
+        # Pull the roster from a single source of truth (also exposed via the
+        # /api/agents/available endpoint) so the UI and the daemon never drift.
+        # If the UI pins a specific strategy (other than the router), restrict
+        # the roster to just that agent.
+        requested = params.get("agent_type")
+        all_agents = _build_available_agents()
+        if requested and requested != "router_agent":
+            available_agents = {requested: all_agents.get(requested, requested)}
+        else:
+            available_agents = all_agents
         pobi_agent = DeadEndAgent(
             session_id=runtime_session_id,
             embedding_session_id=embedding_session_id,
@@ -920,6 +1128,36 @@ def main(
         )
         async def approval_callback() -> str:
             return "yes"
+
+        # docker_client and sandbox_manager are in-memory and lost on daemon
+        # restart (the daemon's init_all runs once at startup). Without this,
+        # a freshly restarted daemon raises "Sandbox manager not initialized"
+        # when launching a scan. init_shell_sandbox depends on docker_client.
+        if component_manager.docker_client is None:
+            result = await component_manager.init_docker()
+            if not result.success:
+                return {
+                    "status": "failed",
+                    "reason": f"Failed to initialize Docker: {result.message}"
+                }
+        if component_manager.sandbox_manager is None:
+            result = await component_manager.init_shell_sandbox()
+            if not result.success:
+                return {
+                    "status": "failed",
+                    "reason": f"Failed to initialize shell sandbox: {result.message}"
+                }
+
+        # RAG session manager is in-memory and lost on daemon restart. Lazily
+        # (re)initialize it here so a freshly restarted daemon can launch scans
+        # without a separate init_rag() call. No Docker dependency.
+        if component_manager.rag_session_manager is None:
+            result = await component_manager.init_rag()
+            if not result.success:
+                return {
+                    "status": "failed",
+                    "reason": f"Failed to initialize RAG: {result.message}"
+                }
 
         # Sandbox instantiation for the agent
         sandbox: Sandbox | None = None

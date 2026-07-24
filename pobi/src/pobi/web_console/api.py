@@ -264,19 +264,33 @@ async def preflight_install_playwright(request: Request):
 
 @app.post("/api/llm/test")
 async def test_llm(request: Request, payload: dict):
-    from .preflight import test_llm_connectivity
-    result = await asyncio.to_thread(
-        test_llm_connectivity,
-        provider=payload.get("provider"),
-        model_name=payload.get("model_name"),
-        api_key=payload.get("api_key"),
-        base_url=payload.get("base_url"),
-    )
+    provider = payload.get("provider")
+    model_name = payload.get("model_name")
+    # Embedding models can't answer a chat completion, so route them to the
+    # embedding connectivity probe (which also reports the vector dimension).
+    if payload.get("type_model") == "embeddings":
+        from .preflight import test_embedding_connectivity
+        result = await asyncio.to_thread(
+            test_embedding_connectivity,
+            provider=provider,
+            model_name=model_name,
+            api_key=payload.get("api_key"),
+            base_url=payload.get("base_url"),
+        )
+    else:
+        from .preflight import test_llm_connectivity
+        result = await asyncio.to_thread(
+            test_llm_connectivity,
+            provider=provider,
+            model_name=model_name,
+            api_key=payload.get("api_key"),
+            base_url=payload.get("base_url"),
+        )
     # Redact key from audit log — never write it.
     await audit_store.add(
         actor=_operator(request), action="test_llm",
         decision="ok" if result.get("ok") else "failed",
-        detail=f"provider={payload.get('provider')} model={payload.get('model_name')} "
+        detail=f"provider={provider} model={model_name} type={payload.get('type_model', 'llm')} "
                f"result={result.get('error_type', 'ok')}",
     )
     return result
@@ -315,23 +329,39 @@ async def get_llm():
     return await _safe_call("get_llm_provider")
 
 
+@app.get("/api/llm/list")
+async def list_llm():
+    """All configured providers (api_key redacted) for the settings page.
+
+    Returns: {current: str, providers: [{provider, model_name, base_url, has_key}, ...]}
+    """
+    return await _safe_call("list_llm_providers")
+
+
 @app.post("/api/llm")
 async def set_llm(request: Request, payload: dict):
-    # If credentials are provided, upsert them via add_model (daemon persists to
-    # config.json). Otherwise just switch the active provider.
-    has_creds = bool(payload.get("api_key")) or bool(payload.get("base_url"))
-    if has_creds:
-        result = await _safe_call("add_model", {
-            "provider": payload.get("provider"),
-            "model_name": payload.get("model_name"),
+    # Always route through `add_model` — the daemon reuses the previously-saved
+    # api_key / base_url when the caller omits them, so a "just switch active
+    # provider" click still works. Errors are propagated so the UI can show them
+    # instead of silently pretending the save succeeded.
+    provider = payload.get("provider")
+    model_name = payload.get("model_name")
+    if not provider or not model_name:
+        raise HTTPException(status_code=400, detail="provider and model_name are required")
+    try:
+        result = await bridge.call("add_model", {
+            "provider": provider,
+            "model_name": model_name,
             "api_key": payload.get("api_key"),
             "base_url": payload.get("base_url"),
+            "type_model": payload.get("type_model"),
+            "vec_dim": payload.get("vec_dim"),
         })
-    else:
-        result = await _safe_call("set_llm_provider", {
-            "provider": payload.get("provider"),
-            "model_name": payload.get("model_name"),
-        })
+    except Exception as exc:
+        # Audit the failure too — operators want to see why saves fail.
+        await audit_store.add(actor=_operator(request), action="set_llm_provider",
+                              decision="failed", detail=f"provider={provider} model={model_name} err={exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
     # Redact secrets from audit trail.
     audit_detail = json.dumps(
         {k: v for k, v in payload.items() if k not in ("api_key",)},
@@ -339,6 +369,25 @@ async def set_llm(request: Request, payload: dict):
     )
     await audit_store.add(actor=_operator(request), action="set_llm_provider",
                           detail=audit_detail)
+    return result
+
+
+@app.delete("/api/llm")
+async def delete_llm(request: Request, provider: str, model_name: str):
+    """Remove a configured model provider from config.json."""
+    if not provider or not model_name:
+        raise HTTPException(status_code=400, detail="provider and model_name are required")
+    try:
+        result = await bridge.call("delete_model", {
+            "provider": provider,
+            "model_name": model_name,
+        })
+    except Exception as exc:
+        await audit_store.add(actor=_operator(request), action="delete_llm_provider",
+                              decision="failed", detail=f"provider={provider} model={model_name} err={exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+    await audit_store.add(actor=_operator(request), action="delete_llm_provider",
+                          detail=f"provider={provider} model={model_name}")
     return result
 
 
@@ -369,6 +418,16 @@ async def set_approval(request: Request, payload: dict):
 @app.get("/api/presets")
 async def presets():
     return get_presets()
+
+
+@app.get("/api/agents/available")
+async def available_agents():
+    """Agent roster for the New Scan strategy picker.
+
+    Mirrors the roster the daemon uses when instantiating an agent (shell is
+    dropped when Docker/Kali are unavailable).
+    """
+    return await _safe_call("get_available_agents")
 
 
 @app.post("/api/agents")
@@ -518,10 +577,9 @@ async def approve_plan_api(request: Request, plan_id: str):
 @app.post("/api/agents/{agent_id}/embed")
 async def embed(request: Request, agent_id: str, payload: dict):
     params = {"agent_id": agent_id, **payload}
-    if bridge.mode == "simulation":
-        asyncio.create_task(bridge.embed_target(params))
-    else:
-        await bridge.embed_target(params)
+    # Await embedding so the scan never starts against an un-embedded target.
+    # (The original deadend-cli awaits embedTarget before running the scan.)
+    await bridge.embed_target(params)
     await audit_store.add(actor=_operator(request), action="embed_target",
                           target=payload.get("target"), detail=agent_id)
     return {"accepted": True}

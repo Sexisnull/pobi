@@ -255,9 +255,9 @@ class DaemonBridge:
 
     async def embed_target(self, params: dict) -> None:
         if self.mode == "simulation":
-            asyncio.create_task(self._sim_embed(params))
+            await self._sim_embed(params)
         else:
-            asyncio.create_task(self.call_stream("embed_target", params, lambda c: None))
+            await self.call_stream("embed_target", params, lambda c: None)
 
     # ------------------------------------------------------------------ #
     # Event fan-out to SSE clients

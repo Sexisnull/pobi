@@ -185,7 +185,11 @@ def _check_llm() -> dict:
         )
     try:
         config = config_setup()
-        providers = getattr(config, "model_providers", []) or []
+        # Providers live on Config.providers (a ProvidersList); Config itself has
+        # no `model_providers` attribute, so reading it directly always returns
+        # []. This was making the preflight LLM check report "no provider
+        # configured" and block every scan even when config.json has a provider.
+        providers = getattr(config.providers, "model_providers", []) or []
         # EmbeddingSpec subclasses ModelSpec — use type() not isinstance().
         llm_specs = [p for p in providers if type(p) is ModelSpec]
     except Exception as exc:
@@ -416,7 +420,7 @@ def test_llm_connectivity(
             from pobi_agent import config_setup
             from pobi_agent.config.settings import ModelSpec
             cfg = config_setup()
-            for spec in getattr(cfg, "model_providers", []) or []:
+            for spec in getattr(cfg.providers, "model_providers", []) or []:
                 if type(spec) is ModelSpec and spec.provider == provider and spec.model_name == model_name:
                     api_key = api_key or spec.api_key
                     base_url = base_url or spec.base_url
@@ -449,6 +453,90 @@ def test_llm_connectivity(
     except Exception as exc:
         # Classify — litellm has typed exceptions but we take a defensive approach
         # so users with older/newer versions get a useful message either way.
+        name = type(exc).__name__.lower()
+        if "auth" in name or "permission" in name:
+            error_type = "auth"
+        elif "rate" in name:
+            error_type = "rate_limit"
+        elif "connection" in name or "timeout" in name or "apiconnection" in name:
+            error_type = "network"
+        elif "notfound" in name or "badrequest" in name:
+            error_type = "bad_request"
+        else:
+            error_type = "other"
+        return {
+            "ok": False,
+            "error_type": error_type,
+            "detail": f"{type(exc).__name__}: {exc}"[:400],
+            "latency_ms": int((time.monotonic() - start) * 1000),
+        }
+
+
+def test_embedding_connectivity(
+    provider: str | None,
+    model_name: str | None,
+    api_key: str | None = None,
+    base_url: str | None = None,
+) -> dict:
+    """Send a minimal embedding request to verify the vector model is reachable
+    and report its dimension.
+
+    ``api_key`` / ``base_url`` are optional overrides — if omitted, the saved
+    config values apply (via ``config_setup()``). A completion ping would fail
+    for embedding-only models, so this uses ``litellm.aembedding`` instead.
+    """
+    if not provider or not model_name:
+        return {"ok": False, "error_type": "missing_input",
+                "detail": "provider and model_name required"}
+
+    # Fall back to saved credentials when the caller left them blank.
+    if not api_key or not base_url:
+        try:
+            from pobi_agent import config_setup
+            from pobi_agent.config.settings import EmbeddingSpec
+            cfg = config_setup()
+            for spec in getattr(cfg.providers, "model_providers", []) or []:
+                if (type(spec) is EmbeddingSpec
+                        and spec.provider == provider
+                        and spec.model_name == model_name):
+                    api_key = api_key or spec.api_key
+                    base_url = base_url or spec.base_url
+                    break
+        except Exception:
+            pass
+
+    try:
+        import litellm
+    except ImportError as exc:
+        return {"ok": False, "error_type": "missing_dep", "detail": f"litellm: {exc}"}
+
+    start = time.monotonic()
+    try:
+        # NB: this runs inside asyncio.to_thread, so use the *synchronous*
+        # litellm.embedding — aembedding is a coroutine and would not execute.
+        resp = litellm.embedding(
+            model=f"{provider}/{model_name}",
+            input=["ping"],
+            api_key=api_key,
+            api_base=base_url,
+            timeout=15,
+        )
+        latency_ms = int((time.monotonic() - start) * 1000)
+        data = resp.data if hasattr(resp, "data") else None
+        first = data[0] if data else None
+        emb = None
+        if first is not None:
+            emb = getattr(first, "embedding", None)
+            if emb is None and isinstance(first, dict):
+                emb = first.get("embedding")
+        dim = len(emb) if emb else None
+        return {
+            "ok": True,
+            "detail": f"vector dim={dim}",
+            "vec_dim": dim,
+            "latency_ms": latency_ms,
+        }
+    except Exception as exc:
         name = type(exc).__name__.lower()
         if "auth" in name or "permission" in name:
             error_type = "auth"

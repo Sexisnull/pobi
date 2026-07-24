@@ -54,8 +54,13 @@ class ComponentManager:
         self.playwright_state = ComponentState(name="playwright")
 
         # Component instances
-        self.config: Config
-        self.model_registry: ModelRegistry | None = None
+        # NOTE: `config` MUST be assigned here (not just annotated) so that
+        # `self.config` exists even before init_config() runs. Without this,
+        # accessing it raises AttributeError instead of returning None, which
+        # surfaced as a 500 ("'ComponentManager' object has no attribute
+        # 'config'") when saving the LLM settings from the UI.
+        self.config: Optional[Config] = None
+        self.model_registry: Optional[ModelRegistry] = None
         self.rag_session_manager: RagSessionManager | None = None
         self.python_sandbox_process: Optional[subprocess.Popen] = None
         self.sandbox_manager: Any = None
