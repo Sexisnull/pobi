@@ -37,22 +37,30 @@ Pobi CLI 是一个自主的 Web 应用渗透测试 Agent，采用反馈驱动迭
 ## 快速开始
 
 ### 前置依赖
-- Docker
+- [uv](https://docs.astral.sh/uv/)（推荐；`install.sh` 缺失时自动安装）
+- Docker（沙箱扫描必需；`install.sh` 会检查并引导安装，并预拉取沙箱镜像）
 - curl
 
 ### 安装
 
+**方式 A — 仅用 uv（最简）**
+
 ```bash
 git clone https://github.com/Sexisnull/pobi.git
 cd pobi
-./install.sh              # 装到 ~/.cache/pobi/venv，脚本链接到 ~/.local/bin
-./install.sh --launch     # 装完立刻起 Web Console
+uv sync                 # 安装 pobi 及 Web 依赖到 ./.venv
+pobi-web-console        # 打开 http://localhost:8000
 ```
 
-其他选项：
+**方式 B — `./install.sh`（自动配置环境）**
+
+安装脚本会创建隔离虚拟环境、把命令链接到 `~/.local/bin`，并帮你检查/配置运行时组件（Docker + 沙箱镜像、Playwright Chromium）：
+
 ```bash
-./install.sh --install-dir /opt/pobi   # 自定义虚拟环境位置
-./install.sh --no-web                   # 跳过 Web Console
+./install.sh                  # 完整安装到 ~/.cache/pobi/venv
+./install.sh --launch         # 装完立刻启动 Web Console
+./install.sh --no-browser     # 跳过较大的 Playwright Chromium 下载
+./install.sh --skip-docker    # 跳过 Docker 检查与镜像预拉取
 ```
 
 若 `pobi` 命令找不到，把 `~/.local/bin` 加进 PATH：
@@ -62,17 +70,22 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ### 运行
 
-**CLI 模式**
-```bash
-pobi --target "http://localhost:3000" --prompt "find SQL injection vulnerabilities"
-```
-
-**Web Console（推荐）**
+**Web Console（统一入口，推荐）**
 ```bash
 pobi-web-console   # 打开 http://localhost:8000
 ```
 
-首次运行会进入交互式向导，引导你配置模型（provider、API key 等），配置写入 `~/.pobi/config.json`。详见 [`pobi/src/pobi/web_console/README.md`](pobi/src/pobi/web_console/README.md)。
+**CLI 模式（可选）**
+```bash
+pobi --target "http://localhost:3000" --prompt "find SQL injection vulnerabilities"
+```
+
+### 使用前的配置
+启动 Web Console 后，在 Settings 中配置：
+- 至少一个**语义模型**（provider + API key + base_url，走你的供应商网关）；
+- 一个**向量 / embedding 模型**（RAG 检索必需，维度需与索引一致）。
+
+配置保存在 `~/.pobi/config.json`。沙箱镜像 `xoxruns/sandboxed_kali` 会在首次扫描时自动拉取（或由 `install.sh` 预拉取）。
 
 ### 命令
 

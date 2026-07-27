@@ -1,15 +1,25 @@
 #!/bin/bash
 #
-# Pobi CLI — install & launch script
+# Pobi — install & environment setup script
 # ---------------------------------------------------------------------------
-# Builds the Pobi CLI Python package into an isolated virtual environment
-# and links the console scripts onto your PATH. By default it also installs
-# the optional [web] extra so the Web Console (pobi-web-console) works.
+# After a plain `git clone`, this script:
+#   1. Ensures `uv` is installed (installs it if missing)
+#   2. Creates an isolated virtualenv and installs the project via `uv sync`
+#      (web dependencies are included by default, so `pobi-web-console` works)
+#   3. Checks runtime prerequisites and helps configure them:
+#        - Docker (required for sandboxed scans; pulls the sandbox image)
+#        - Playwright Chromium (used by the browser-automation tool)
+#   4. Symlinks the console scripts onto your PATH
+#   5. Optionally launches the Web Console
+#
+# Simplest path (no script needed):
+#   uv sync && pobi-web-console        # then open http://localhost:8000
 #
 # Examples:
-#   ./install.sh                         # install into ~/.cache/pobi/venv
+#   ./install.sh                         # full setup into ~/.cache/pobi/venv
 #   ./install.sh --install-dir /opt/pobi
-#   ./install.sh --no-web                # skip the Web Console extra
+#   ./install.sh --no-browser            # skip the (large) Playwright download
+#   ./install.sh --skip-docker           # skip Docker checks / image pull
 #   ./install.sh --launch                # install, then launch the Web Console
 #   ./install.sh --help
 # ---------------------------------------------------------------------------
@@ -33,9 +43,10 @@ fi
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.cache/pobi/venv}"
 BIN_DIR="$HOME/.local/bin"
 PACKAGE_DIR="$SCRIPT_DIR/pobi"
-WEB_EXTRA=true
 LAUNCH=false
 PYTHON_BIN=""
+INSTALL_BROWSER=true
+SKIP_DOCKER=false
 
 # ---- Argument parsing ----
 while [[ $# -gt 0 ]]; do
@@ -44,18 +55,20 @@ while [[ $# -gt 0 ]]; do
     --install-dir)  INSTALL_DIR="$2"; shift 2;;
     --bin-dir)      BIN_DIR="$2"; shift 2;;
     --package-dir)  PACKAGE_DIR="$2"; shift 2;;
-    --no-web)       WEB_EXTRA=false; shift;;
+    --no-browser)   INSTALL_BROWSER=false; shift;;
+    --skip-docker)  SKIP_DOCKER=true; shift;;
     --launch)       LAUNCH=true; shift;;
     --python)       PYTHON_BIN="$2"; shift 2;;
     -h|--help)
-      sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
       echo
       echo "Usage: ./install.sh [OPTIONS]"
       echo "  --version VER       Version label (informational, default: $VERSION)"
       echo "  --install-dir DIR   Virtualenv location (default: $INSTALL_DIR)"
       echo "  --bin-dir DIR       Where to symlink console scripts (default: $BIN_DIR)"
       echo "  --package-dir DIR   Path to the pobi package (default: $PACKAGE_DIR)"
-      echo "  --no-web            Skip the optional [web] extra (Web Console)"
+      echo "  --no-browser        Skip the Playwright Chromium download"
+      echo "  --skip-docker       Skip Docker checks / image pull"
       echo "  --launch            Launch the Web Console after installing"
       echo "  --python PATH       Python interpreter to use (default: uv/python3)"
       echo "  -h, --help          Show this help"
@@ -64,19 +77,34 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-info "==> Pobi CLI installer (version $VERSION)"
+info "==> Pobi installer (version $VERSION)"
 
-# ---- Ensure git submodules are initialized (sandbox, benchmarks, ...) ----
-# Git does not clone submodule contents by default, so do it here to make
-# `./install.sh` self-sufficient after a plain `git clone` (no extra command
-# required by the user). Skipped gracefully when not in a git checkout.
+# ---- 0. Ensure uv is available ----
+if ! command -v uv >/dev/null 2>&1; then
+  warn "uv not found — installing it now (requires curl + internet) ..."
+  if command -v curl >/dev/null 2>&1; then
+    if ! curl -LsSf https://astral.sh/uv/install.sh | sh; then
+      err "uv auto-install failed. Install uv manually: https://docs.astral.sh/uv/getting-started/installation/"
+      exit 1
+    fi
+    # Put the uv we just installed on PATH for the rest of this script.
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+  else
+    err "curl is required to auto-install uv. Install uv manually and re-run."
+    exit 1
+  fi
+  if ! command -v uv >/dev/null 2>&1; then
+    err "uv installation failed. Install it manually and re-run."
+    exit 1
+  fi
+fi
+info "==> Using uv: $(uv --version)"
+
+# ---- 1. Ensure git submodules (best-effort; skipped when none) ----
 if [ -f "$SCRIPT_DIR/.gitmodules" ] && command -v git >/dev/null 2>&1; then
   info "==> Initializing git submodules ..."
-  # Non-fatal: some submodules (e.g. benchmarks) may point at an upstream
-  # commit that is no longer reachable; the core sandbox is what matters.
-  if ! git -C "$SCRIPT_DIR" submodule update --init --recursive; then
-    warn "Submodule init partially failed (an upstream commit may be unreachable); core sandbox should still be present."
-  fi
+  git -C "$SCRIPT_DIR" submodule update --init --recursive || \
+    warn "Submodule init partially failed; core sandbox should still be present."
 fi
 
 if [ ! -f "$PACKAGE_DIR/pyproject.toml" ]; then
@@ -85,61 +113,28 @@ if [ ! -f "$PACKAGE_DIR/pyproject.toml" ]; then
   exit 1
 fi
 
-# ---- Resolve a Python interpreter ----
+# ---- 2. Resolve a Python interpreter & create the venv ----
 if [ -z "$PYTHON_BIN" ]; then
-  if command -v uv >/dev/null 2>&1; then
-    PYTHON_BIN="$(uv python find 2>/dev/null || true)"
-  fi
-  if [ -z "$PYTHON_BIN" ]; then
-    PYTHON_BIN="$(command -v python3 || true)"
-  fi
+  PYTHON_BIN="$(uv python find 2>/dev/null || true)"
+  [ -z "$PYTHON_BIN" ] && PYTHON_BIN="$(command -v python3 || true)"
 fi
 [ -z "$PYTHON_BIN" ] && { err "No Python 3 interpreter found. Install Python 3.11+ and retry."; exit 1; }
 info "==> Using Python: $("$PYTHON_BIN" --version 2>&1)"
 
-# ---- Create / reuse virtualenv ----
 if [ ! -x "$INSTALL_DIR/bin/python" ]; then
   info "==> Creating virtual environment at $INSTALL_DIR"
   mkdir -p "$INSTALL_DIR"
-  if command -v uv >/dev/null 2>&1; then
-    uv venv --python "$PYTHON_BIN" "$INSTALL_DIR" >/dev/null
-  else
-    "$PYTHON_BIN" -m venv "$INSTALL_DIR"
-  fi
+  uv venv --python "$PYTHON_BIN" "$INSTALL_DIR" >/dev/null
 fi
 VENV_PY="$INSTALL_DIR/bin/python"
 VENV_BIN="$INSTALL_DIR/bin"
 
-# ---- Install the package ----
-# IMPORTANT: install from the WORKSPACE ROOT with `uv sync` so uv resolves the
-# internal workspace packages (pobi-agent, pobi-prompts, pobi-eval,
-# python-sandbox-client) via the lockfile. `uv pip install ./pobi[web]` ignores
-# the [tool.uv.sources] workspace mappings and fails because those packages do
-# not exist on PyPI.
-if command -v uv >/dev/null 2>&1; then
-  SYNC_ARGS=()
-  if [ "$WEB_EXTRA" = true ]; then
-    SYNC_ARGS+=(--extra web)
-    info "==> Installing pobi (workspace) with the [web] extra via uv sync ..."
-  else
-    info "==> Installing pobi (workspace, core only) via uv sync ..."
-  fi
-  (cd "$SCRIPT_DIR" && UV_PROJECT_ENVIRONMENT="$INSTALL_DIR" uv sync "${SYNC_ARGS[@]}")
-else
-  warn "uv not found; falling back to pip (builds each workspace member from source)."
-  "$VENV_PY" -m pip install --quiet --upgrade pip
-  # Install workspace members in dependency order, then pobi (with [web] if requested).
-  for m in pobi/pobi_prompts pobi/simple-python-interpreter-sandbox pobi/pobi_agent pobi/pobi_eval; do
-    if [ -f "$SCRIPT_DIR/$m/pyproject.toml" ]; then
-      (cd "$SCRIPT_DIR/$m" && "$VENV_PY" -m pip install .)
-    fi
-  done
-  SPEC="."
-  [ "$WEB_EXTRA" = true ] && SPEC=".[web]"
-  (cd "$PACKAGE_DIR" && "$VENV_PY" -m pip install "$SPEC")
-fi
+# ---- 3. Install the project (workspace-aware uv sync) ----
+# Web deps are part of the default dependencies, so plain `uv sync` is enough.
+info "==> Installing pobi (workspace) via uv sync ..."
+(cd "$SCRIPT_DIR" && UV_PROJECT_ENVIRONMENT="$INSTALL_DIR" uv sync)
 
-# ---- Symlink console scripts onto PATH ----
+# ---- 4. Symlink console scripts onto PATH ----
 info "==> Linking console scripts into $BIN_DIR"
 mkdir -p "$BIN_DIR"
 for cmd in pobi pobi-web-console pobi-jsonrpc-server pobi-web pobi_eval; do
@@ -148,7 +143,6 @@ for cmd in pobi pobi-web-console pobi-jsonrpc-server pobi-web pobi_eval; do
     info "    linked $cmd"
   fi
 done
-
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
   warn "==> $BIN_DIR is not on your PATH. Add it with:"
   if [ "$(uname)" = "Darwin" ]; then
@@ -158,15 +152,56 @@ if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
   fi
 fi
 
-info "==> Done. Version: $VERSION"
-echo
-echo "  Try it:"
-echo "    pobi --target http://localhost:3000 --prompt \"find SQL injection\""
-if [ "$WEB_EXTRA" = true ]; then
-echo "    pobi-web-console      # then open http://localhost:8000"
+# ---- 5. Runtime environment checks (best-effort, non-fatal) ----
+if [ "$SKIP_DOCKER" = false ]; then
+  info "==> Checking Docker (required for sandboxed scans) ..."
+  if command -v docker >/dev/null 2>&1; then
+    if docker info >/dev/null 2>&1; then
+      info "    Docker: OK (daemon running)"
+      info "    Pre-pulling sandbox image xoxruns/sandboxed_kali ..."
+      if docker pull xoxruns/sandboxed_kali >/dev/null 2>&1; then
+        info "    image pulled"
+      else
+        warn "    could not pull image (will retry automatically on first scan)"
+      fi
+    else
+      warn "    Docker CLI found but the daemon is NOT running."
+      warn "    Start Docker Desktop, or 'sudo systemctl start docker', before running a scan."
+    fi
+  else
+    warn "    Docker not found. Install it to enable sandboxed scans:"
+    if [ "$(uname)" = "Darwin" ]; then
+      echo "      brew install --cask docker      # then launch Docker Desktop"
+    elif [ "$(uname)" = "Linux" ]; then
+      echo "      sudo apt-get update && sudo apt-get install -y docker.io"
+      echo "      sudo usermod -aG docker \$USER   # then re-login"
+    else
+      echo "      Install Docker Desktop: https://www.docker.com/products/docker-desktop"
+    fi
+  fi
 fi
 
-# ---- Optional launch ----
+if [ "$INSTALL_BROWSER" = true ]; then
+  info "==> Installing Playwright Chromium (used by the browser tool) ..."
+  if [ -x "$VENV_BIN/playwright" ]; then
+    if "$VENV_BIN/playwright" install chromium >/dev/null 2>&1; then
+      info "    chromium installed"
+    else
+      warn "    Playwright Chromium install skipped/failed (browser tool may need it later)"
+    fi
+  else
+    warn "    playwright not found in venv; skipping browser install"
+  fi
+fi
+
+info "==> Done. Version: $VERSION"
+echo
+echo "  Launch the Web Console:"
+echo "    pobi-web-console          # then open http://localhost:8000"
+echo "  Or run a headless scan:"
+echo "    pobi --target http://localhost:3000 --prompt \"find SQL injection\""
+
+# ---- 6. Optional launch ----
 if [ "$LAUNCH" = true ]; then
   if [ -x "$BIN_DIR/pobi-web-console" ]; then
     info "==> Launching Web Console ..."
