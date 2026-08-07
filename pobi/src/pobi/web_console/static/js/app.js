@@ -62,8 +62,8 @@ const I18N = {
     "Session state": "会话状态",
     "loading…": "加载中…",
     "APPROVAL REQUIRED": "需要审批",
-    "✓ Approve": "✓ 批准",
-    "✕ Deny": "✕ 拒绝",
+    "Approve": "批准",
+    "Deny": "拒绝",
     "Interrupt this scan?": "确定要中断本次扫描吗？",
     "◉ Live monitor": "◉ 实时监控",
     "Findings": "发现",
@@ -329,7 +329,7 @@ async function renderDashboard(view) {
   cg.innerHTML = comps.map(renderComponentCard).join("") || `<p class="empty">${t("No component data")}</p>`;
 
   const ra = document.getElementById("recentAud");
-  ra.innerHTML = (aud || []).map((a) => `<div><span class="key">${fmtTime(a.ts)}</span><span>${a.action}<span class="muted"> · ${a.actor}</span></span></div>`).join("") || `<p class="empty">${t("No activity yet")}</p>`;
+  ra.innerHTML = (aud || []).map((a) => `<div><span class="key">${fmtTime(a.ts)}</span><span>${esc(a.action)}<span class="muted"> · ${esc(a.actor)}</span></span></div>`).join("") || `<p class="empty">${t("No activity yet")}</p>`;
 }
 
 /* ---------------- Preflight (env self-check) ---------------- */
@@ -356,7 +356,7 @@ async function renderPreflight() {
 }
 
 function renderPreflightCheck(c) {
-  const icon = { ok: "✅", warn: "⚠️", error: "❌" }[c.status] || "•";
+  const iconName = { ok: "check", warn: "vulns", error: "alert" }[c.status] || "info";
   const actions = (c.actions || []).map((a) => {
     if (a.kind === "api") {
       return `<button class="btn small" data-pf-api data-method="${a.method}" data-path="${a.path}">${a.label}</button>`;
@@ -371,7 +371,7 @@ function renderPreflightCheck(c) {
   }).join(" ");
   return `
     <div class="pf-check pf-${c.status}">
-      <div class="pf-title">${icon} <b>${c.label}</b> <span class="muted"> — ${c.detail || ""}</span></div>
+      <div class="pf-title"><span class="pf-ico">${svgIcon(iconName, "pf-ico")}</span> <b>${c.label}</b> <span class="muted"> — ${c.detail || ""}</span></div>
       ${c.impact ? `<div class="pf-impact muted">${c.impact}</div>` : ""}
       ${actions ? `<div class="pf-actions">${actions}</div>` : ""}
     </div>`;
@@ -420,11 +420,11 @@ function renderPreflightWithFixes(pf) {
     btn.onclick = async () => {
       const original = btn.innerHTML;
       btn.disabled = true;
-      btn.innerHTML = `<span class="spin">⏳</span> ${t("Fixing…")}`;
+      btn.innerHTML = `<span class="spin">${svgIcon("refresh")}</span> ${t("Fixing…")}`;
       const r = await safe(() => api(btn.dataset.method || "POST", btn.dataset.path), { ok: false, detail: t("request failed") });
       if (r.ok) {
         toast(`✅ ${r.detail || t("Fixed! Please refresh.")}`);
-        btn.innerHTML = `✅ ${t("Fixed")}`;
+        btn.innerHTML = `${svgIcon("check", "btn-ico")} ${t("Fixed")}`;
         btn.className = "btn small good";
         setTimeout(() => router(), 1500);
       } else {
@@ -438,13 +438,13 @@ function renderPreflightWithFixes(pf) {
 
 /* Render a single preflight check item with fix button (used in Settings) */
 function renderPreflightCheckWithFix(c) {
-  const icon = { ok: "✅", warn: "⚠️", error: "❌" }[c.status] || "•";
+  const iconName = { ok: "check", warn: "vulns", error: "alert" }[c.status] || "info";
   let fixBtn = "";
   if (c.status !== "ok" && c.actions && c.actions.length) {
     /* Use the first API action as auto-fix */
     const fixAction = c.actions.find((a) => a.kind === "api") || c.actions[0];
     if (fixAction.kind === "api") {
-      fixBtn = `<button class="btn small primary" data-pf-fix data-method="${fixAction.method}" data-path="${fixAction.path}">🔧 ${fixAction.label || t("Auto-fix")}</button>`;
+      fixBtn = `<button class="btn small primary" data-pf-fix data-method="${fixAction.method}" data-path="${fixAction.path}">${svgIcon("wrench", "btn-ico")} ${fixAction.label || t("Auto-fix")}</button>`;
     } else if (fixAction.kind === "link") {
       fixBtn = `<a class="btn ghost small" href="${fixAction.href}" target="_blank" rel="noreferrer noopener">${fixAction.label} ↗</a>`;
     } else if (fixAction.kind === "route") {
@@ -453,7 +453,7 @@ function renderPreflightCheckWithFix(c) {
   }
   return `
     <div class="pf-check pf-${c.status}">
-      <div class="pf-title">${icon} <b>${c.label}</b> <span class="muted"> — ${c.detail || ""}</span></div>
+      <div class="pf-title"><span class="pf-ico">${svgIcon(iconName, "pf-ico")}</span> <b>${c.label}</b> <span class="muted"> — ${c.detail || ""}</span></div>
       ${c.impact ? `<div class="pf-impact muted">${c.impact}</div>` : ""}
       ${fixBtn ? `<div class="pf-actions" style="margin-top:6px">${fixBtn}</div>` : ""}
     </div>`;
@@ -567,7 +567,7 @@ async function renderScan(view, params) {
   let selectedPreset = null;
   pbox.innerHTML = presets.map((p) => `
     <div class="preset" data-id="${p.id}">
-      <span class="pcheck" aria-hidden="true">✓</span>
+      <span class="pcheck" aria-hidden="true">${svgIcon("check", "pcheck-ico")}</span>
       <div class="pname"><span style="color:${p.color}">●</span>${p.name}</div>
       <div class="pdesc">${p.description}</div>
     </div>`).join("");
@@ -644,6 +644,10 @@ async function renderScan(view, params) {
 
 /* ---------------- Monitor ---------------- */
 function renderMonitor(view, params) {
+  // Clear any prior monitor poll before re-entering (e.g. switching sessions
+  // in place). Without this the old setInterval keeps its closure alive and
+  // keeps pumping events into the new #feed while hammering the old session.
+  if (window.__monTick) { clearInterval(window.__monTick); window.__monTick = null; }
   const session = params.session;
   const agent = params.agent;
   state.currentSession = session || null;
@@ -706,7 +710,7 @@ function appendFeedLine(feed, ev) {
   if (!feed) return;
   const line = document.createElement("div");
   line.className = "line";
-  line.innerHTML = `<span class="ts">${fmtTime()}</span><span class="et">${ev.type}</span><span class="ev">${summarize(ev)}</span>`;
+  line.innerHTML = `<span class="ts">${fmtTime()}</span><span class="et">${esc(ev.type)}</span><span class="ev">${summarize(ev)}</span>`;
   feed.prepend(line);
   while (feed.childElementCount > 400) feed.lastChild.remove();
 }
@@ -834,7 +838,7 @@ document.addEventListener("click", async (ev) => {
 
 function updateConfidenceBar() {
   const fill = document.getElementById("confFill");
-  if (fill) fill.style.width = Math.round(state.confidence * 100) + "%";
+  if (fill) fill.style.setProperty("--p", (state.confidence || 0).toFixed(3));
 }
 
 function renderApprovals() {
@@ -848,8 +852,8 @@ function renderApprovals() {
       <div style="font-weight:700;margin-top:4px">${esc(d.tool_name || "")}</div>
       <div class="desc">${esc(d.description || "")}<br><span class="mono">${esc(JSON.stringify(d.tool_args || {}))}</span></div>
       <div class="pill-row">
-        <button class="btn primary" onclick="decideApproval('${id}', true)">${t("✓ Approve")}</button>
-        <button class="btn danger" onclick="decideApproval('${id}', false)">${t("✕ Deny")}</button>
+        <button class="btn primary" onclick="decideApproval('${id}', true)">${svgIcon("check", "btn-ico")} ${t("Approve")}</button>
+        <button class="btn danger" onclick="decideApproval('${id}', false)">${svgIcon("x", "btn-ico")} ${t("Deny")}</button>
       </div></div>`;
   }).join("");
 }
@@ -1023,7 +1027,7 @@ async function renderSettings(view) {
     const box = document.getElementById("llmTestResult");
     box.style.display = "block";
     box.className = "pf-check pf-warn";
-    box.innerHTML = `⏳ ${t("Testing...")}`;
+    box.innerHTML = `<span class="spin">${svgIcon("refresh")}</span> ${t("Testing...")}`;
     const payload = {
       provider: document.getElementById("llmP").value,
       model_name: document.getElementById("llmM").value,
@@ -1033,7 +1037,7 @@ async function renderSettings(view) {
     const r = await safe(() => api("POST", "/api/llm/test", payload), { ok: false, error_type: "network", detail: "request failed" });
     if (r.ok) {
       box.className = "pf-check pf-ok";
-      box.innerHTML = `✅ ${t("Connected")} — ${r.detail || ""} <span class="muted">(${r.latency_ms}ms)</span>`;
+      box.innerHTML = `${svgIcon("check", "bi")} ${t("Connected")} — ${r.detail || ""} <span class="muted">(${r.latency_ms}ms)</span>`;
     } else {
       const safeDetail = String(r.detail || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
       box.className = "pf-check pf-error";
@@ -1079,7 +1083,7 @@ async function renderSettings(view) {
     const box = document.getElementById("embTestResult");
     box.style.display = "block";
     box.className = "pf-check pf-warn";
-    box.innerHTML = `⏳ ${t("Testing...")}`;
+    box.innerHTML = `<span class="spin">${svgIcon("refresh")}</span> ${t("Testing...")}`;
     const payload = {
       provider: document.getElementById("embP").value,
       model_name: document.getElementById("embM").value,
@@ -1091,7 +1095,7 @@ async function renderSettings(view) {
     if (r.ok) {
       box.className = "pf-check pf-ok";
       const dim = r.vec_dim ? ` (dim ${r.vec_dim})` : "";
-      box.innerHTML = `✅ ${t("Connected")} — ${r.detail || ""}${dim} <span class="muted">(${r.latency_ms}ms)</span>`;
+      box.innerHTML = `${svgIcon("check", "bi")} ${t("Connected")} — ${r.detail || ""}${dim} <span class="muted">(${r.latency_ms}ms)</span>`;
     } else {
       const safeDetail = String(r.detail || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
       box.className = "pf-check pf-error";
@@ -1138,30 +1142,24 @@ function banner({ id, level, message, actionLabel, actionHref, actionOnClick }) 
   if (!host) {
     host = document.createElement("div");
     host.id = "bannerHost";
-    host.style.cssText = "position:fixed;top:0;left:232px;right:0;z-index:60;display:flex;flex-direction:column;gap:0";
+    host.className = "bannerHost";
     document.body.appendChild(host);
   }
   const bid = id || `b-${Math.random().toString(36).slice(2, 8)}`;
   const existing = document.getElementById(bid);
   if (existing) existing.remove();
 
-  const colors = {
-    error: "background:#4a1d1d;border-bottom:1px solid #7a2b2b;color:#ffdada",
-    warn:  "background:#4a3a1d;border-bottom:1px solid #7a5b2b;color:#ffeeb8",
-    info:  "background:#1d2a4a;border-bottom:1px solid #2b447a;color:#dae4ff",
-  };
-  const style = colors[level] || colors.info;
   const b = document.createElement("div");
   b.id = bid;
-  b.style.cssText = `${style};padding:10px 18px;display:flex;align-items:center;justify-content:space-between;font-size:13px`;
-  const icon = { error: "❌", warn: "⚠️", info: "ℹ️" }[level] || "•";
+  b.className = "banner " + (level === "error" ? "bad" : level);
+  const iconName = { error: "alert", warn: "vulns", info: "info" }[level] || "info";
   const actionBtn = actionLabel
     ? `<button class="btn small" style="margin-left:10px" data-bnr-action>${actionLabel}</button>`
     : "";
   b.innerHTML = `
-    <span>${icon} ${message}</span>
+    <span class="b-msg"><span class="bi">${svgIcon(iconName, "bi")}</span>${message}</span>
     <span>${actionBtn}
-      <button class="btn small ghost" style="margin-left:6px" data-bnr-close>${t("Dismiss")}</button>
+      <button class="btn small ghost" style="margin-left:6px" data-bnr-close>${svgIcon("x", "bi")} ${t("Dismiss")}</button>
     </span>`;
   host.appendChild(b);
   b.querySelector("[data-bnr-close]").onclick = () => b.remove();
@@ -1333,7 +1331,7 @@ async function renderTokens(view, params) {
     phaseEl.innerHTML = phases.map(([name, p]) => {
       const w = Math.round(100 * (p.total_tokens || 0) / max);
       return `<div class="bar-row"><div class="bar-label">${esc(name)}</div>
-        <div class="bar-track"><div class="bar-fill" style="width:${w}%"></div></div>
+        <div class="bar-track"><div class="bar-fill" style="--p:${(w / 100).toFixed(3)}"></div></div>
         <div class="bar-val">${fmtNum(p.total_tokens || 0)} · $${(p.cost_usd || 0).toFixed(2)}</div></div>`;
     }).join("");
   } else { phaseEl.innerHTML = `<p class="empty">${t("no data")}</p>`; }
@@ -1428,11 +1426,16 @@ function ensureAgentsInit() {
 function truncateStr(s, n) { s = String(s == null ? "" : s); return s.length > n ? s.slice(0, n - 1) + "…" : s; }
 function setTxt(id, v) { const e = document.getElementById(id); if (e) e.textContent = v; }
 function cssId(s) { return String(s).replace(/[^a-zA-Z0-9_-]/g, "_"); }
+const TOAST_ICON = { good: "check", warn: "vulns", bad: "alert", info: "info" };
 function toast(msg, kind) {
+  const k = kind || "good";
   let t = document.getElementById("toast");
   if (!t) { t = document.createElement("div"); t.id = "toast"; t.className = "toast"; document.body.appendChild(t); }
-  t.textContent = msg; t.className = "toast show " + (kind || "good");
-  clearTimeout(t._tm); t._tm = setTimeout(() => { t.className = "toast " + (kind || "good"); }, 2800);
+  const clean = String(msg).replace(/^[\s]*[✅❌⚠️✔✕×]\s*/u, "").replace(/\s*[✅❌⚠️✔✕×]$/u, "");
+  t.innerHTML = `<span class="toast-ico">${svgIcon(TOAST_ICON[k] || "info", "ti")}</span><span class="toast-msg"></span>`;
+  t.querySelector(".toast-msg").textContent = clean;
+  t.className = "toast show " + k;
+  clearTimeout(t._tm); t._tm = setTimeout(() => { t.className = "toast " + k; }, 2800);
 }
 
 function updateLiveState(ev) {
@@ -1481,10 +1484,14 @@ function updateLiveState(ev) {
   }
 }
 
+function svgIcon(name, cls) {
+  return `<svg class="${cls || "ico"}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#i-${name}"></use></svg>`;
+}
+
 const RIVER_ICON = {
-  agent_start: "▶", agent_step: "▸", task_created: "✚", tool_call_start: "⚙",
-  execution_record: "↻", confidence_update: "◈", task_status_changed: "✔",
-  validation_result: "★", token_usage: "∑", session_end: "■", approval_required: "⚠",
+  agent_start: "play", agent_step: "chevron", task_created: "plus", tool_call_start: "settings",
+  execution_record: "refresh", confidence_update: "diamond", task_status_changed: "validation",
+  validation_result: "star", token_usage: "tokens", session_end: "square", approval_required: "vulns",
 };
 
 function allAgentNames() {
@@ -1511,7 +1518,7 @@ function updateOrb(name) {
   const t = document.getElementById("orbtask-" + cssId(name));
   const tl = document.getElementById("orbtool-" + cssId(name));
   if (t) t.textContent = ag.task ? truncateStr(ag.task, 40) : "";
-  if (tl) tl.textContent = ag.tool ? "⚙ " + ag.tool : "";
+  if (tl) tl.innerHTML = ag.tool ? `<span class="orb-ico">${svgIcon("settings", "orb-ico")}</span> ${esc(ag.tool)}` : "";
 }
 function updateKpis() {
   const k = liveState.kpis;
@@ -1532,7 +1539,7 @@ function prependRiver(ev, silent) {
   line.className = "river-line type-" + ev.type;
   const d = ev.data || {};
   const label = d.task || d.agent_name || d.agent_id || d.tool_name || "";
-  line.innerHTML = `<span class="river-ico">${RIVER_ICON[ev.type] || "•"}</span>` +
+  line.innerHTML = `<span class="river-ico">${svgIcon(RIVER_ICON[ev.type] || "square", "ricon")}</span>` +
     `<span class="river-time">${fmtTime(ev.ts)}</span>` +
     `<span class="river-type">${esc(ev.type)}</span>` +
     `<span class="river-msg">${esc(String(label))}</span>`;
@@ -1561,7 +1568,7 @@ async function renderLive(view, params) {
   view.innerHTML = `
     <div class="live-wrap">
       <div class="live-head">
-        <div class="live-title">⚡ 实时 Agent 作战台 <span class="live-session" id="liveSession"></span></div>
+        <div class="live-title"><span class="lt-ico">${svgIcon("live")}</span> 实时 Agent 作战台 <span class="live-session" id="liveSession"></span></div>
         <div class="live-status" id="liveStatus"></div>
       </div>
       <div class="live-kpis" id="liveKpis">
@@ -1570,9 +1577,9 @@ async function renderLive(view, params) {
       <div class="live-grid">
         <div class="live-orbs" id="liveOrbs">${orbsHTML()}</div>
         <div class="live-side">
-          <div class="panel-title">🎯 最新发现 <span class="badge ghost" id="liveFindCount">0</span></div>
+          <div class="panel-title">${svgIcon("target")} 最新发现 <span class="badge ghost" id="liveFindCount">0</span></div>
           <div class="findings-ticker" id="liveFindings"></div>
-          <div class="panel-title">🌊 事件流</div>
+          <div class="panel-title">${svgIcon("waves")} 事件流</div>
           <div class="event-river" id="liveRiver"></div>
         </div>
       </div>
@@ -1617,23 +1624,41 @@ async function renderAgents(view, params) {
      <div class="ac-role">${esc(a.role || "")}</div>
      <div class="ac-desc">${esc(truncateStr(a.description || "", 100))}</div>
      <div class="ac-meta"><span class="badge ghost">${a.bytes}B</span><span class="badge ${a.writable ? "good" : "warn"}">${a.writable ? "可写" : "只读"}</span><span class="badge ghost">${a.override ? "override" : "package"}</span></div>
-     <button class="btn" data-edit="${esc(a.name)}">编辑提示词 ✎</button>
+     <button class="btn" data-edit="${esc(a.name)}">${svgIcon("edit", "btn-ico")} 编辑提示词</button>
    </div>`).join("");
   grid.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => openPromptEditor(b.getAttribute("data-edit"), view)));
 }
 async function openPromptEditor(name, view) {
   let overlay = document.getElementById("promptOverlay");
-  if (!overlay) { overlay = el("div", "overlay"); overlay.id = "promptOverlay"; document.body.appendChild(overlay); }
+  if (!overlay) { overlay = document.createElement("div"); overlay.className = "overlay"; overlay.id = "promptOverlay"; document.body.appendChild(overlay); }
   overlay.innerHTML = `<div class="modal prompt-modal">
-    <div class="modal-head"><span>✎ 编辑提示词 · ${esc(name)}</span><button class="x" id="promptClose">✕</button></div>
+    <div class="modal-head"><span>${svgIcon("edit", "btn-ico")} 编辑提示词 · ${esc(name)}</span><button class="x" id="promptClose">${svgIcon("x", "x-ico")}</button></div>
     <textarea class="code-editor" id="promptText" spellcheck="false">加载中…</textarea>
     <div class="modal-foot"><span class="hint" id="promptHint"></span><span class="spacer"></span>
       <button class="btn ghost" id="promptCancel">取消</button>
       <button class="btn primary" id="promptSave">保存并同步 ⤓</button></div>
   </div>`;
   overlay.classList.add("show");
+  overlay.setAttribute("role", "dialog");
+  overlay.setAttribute("aria-modal", "true");
+  overlay._prevFocus = document.activeElement;
+  overlay._onBackdrop = (e) => { if (e.target === overlay) closePromptEditor(); };
+  overlay.addEventListener("mousedown", overlay._onBackdrop);
+  overlay._onKey = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); closePromptEditor(); }
+    else if (e.key === "Tab") {
+      const f = overlay.querySelectorAll('button, textarea, input, select, [tabindex]:not([tabindex="-1"])');
+      if (!f.length) return;
+      const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  };
+  overlay.addEventListener("keydown", overlay._onKey);
   document.getElementById("promptClose").onclick = closePromptEditor;
   document.getElementById("promptCancel").onclick = closePromptEditor;
+  const ta = document.getElementById("promptText");
+  if (ta) ta.focus();
   try {
     const r = await api("GET", "/api/agents/templates/" + encodeURIComponent(name));
     document.getElementById("promptText").value = r.content;
@@ -1655,7 +1680,14 @@ async function openPromptEditor(name, view) {
     } finally { btn.disabled = false; btn.textContent = "保存并同步 ⤓"; }
   };
 }
-function closePromptEditor() { const o = document.getElementById("promptOverlay"); if (o) o.classList.remove("show"); }
+function closePromptEditor() {
+  const o = document.getElementById("promptOverlay");
+  if (!o) return;
+  o.classList.remove("show");
+  if (o._onKey) o.removeEventListener("keydown", o._onKey);
+  if (o._onBackdrop) o.removeEventListener("mousedown", o._onBackdrop);
+  if (o._prevFocus && typeof o._prevFocus.focus === "function") o._prevFocus.focus();
+}
 
 /* ===========================================================================
    Validation — strategy config (sync to backend YAML)
@@ -1679,7 +1711,7 @@ async function renderValidation(view, params) {
       </div>
       <div class="modal-foot"><span class="hint">保存后写入 validation.yaml（后端运行时加载）</span><span class="spacer"></span>
         <button class="btn ghost" id="valReset">重置默认</button>
-        <button class="btn primary" id="valSave">保存并同步到后端 ⤓</button></div>
+        <button class="btn primary" id="valSave">${svgIcon("download", "btn-ico")} 保存并同步到后端</button></div>
     </div>`;
   document.getElementById("valType").value = cfg.validation_type || "";
   const stratList = document.getElementById("stratList");
@@ -1691,7 +1723,7 @@ async function renderValidation(view, params) {
         <input class="spattern" placeholder="pattern（flag 用，正则）" value="${esc(s.pattern || "")}">
         <input class="stype" placeholder="validation_type" value="${esc(s.validation_type || "")}">
         <input class="sformat" placeholder="validation_format" value="${esc(s.validation_format || "")}">
-        <button class="x" data-del="${i}">✕</button>
+        <button class="x" data-del="${i}">${svgIcon("x", "x-ico")}</button>
       </div>`;
     }).join("") || `<div class="muted">（暂无策略）</div>`;
     stratList.querySelectorAll("[data-del]").forEach((b) => (b.onclick = () => { cfg.strategies.splice(+b.getAttribute("data-del"), 1); drawStrats(); }));
@@ -1712,7 +1744,7 @@ async function renderValidation(view, params) {
     const btn = document.getElementById("valSave"); btn.disabled = true; btn.textContent = "保存中…";
     try { await api("POST", "/api/validation-config", cfg); toast("验证策略已同步到后端 ✓", "good"); }
     catch (e) { toast("保存失败: " + e.message, "bad"); }
-    finally { btn.disabled = false; btn.textContent = "保存并同步到后端 ⤓"; }
+    finally { btn.disabled = false; btn.innerHTML = `${svgIcon("download", "btn-ico")} 保存并同步到后端`; }
   };
 }
 

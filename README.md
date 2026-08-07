@@ -119,20 +119,24 @@ pobi
 
 ### 进行中（面向 v0.2）
 - 🚧 代码库分析支持（白盒测试）
-- 🚧 预设工作流（API 测试、Web 应用、认证绕过）
+- 🚧 **Skills / 方法论 playbook（Markdown 化，社区可贡献）**——把原"预设工作流"升级为每类漏洞一份 `SKILL.md`（侦察 / 注入 / IDOR / SSRF / JWT …），Subagent 按需在上下文加载 `[借鉴: PentesterFlow]`
+- 🚧 **覆盖率追踪（coverage）**：记录「端点 × 参数 × 漏洞类」三元组覆盖度，提供 `/next` 式下一步建议，避免重复探测与遗漏 `[借鉴: PentesterFlow]`
 - 🚧 攻击链保存与重放
 - 🚧 上下文压缩（减少冗余工具调用）
+- 🚧 **连续学习记忆（项目 + 个人双层）**：在现有 RAG embedding 检索之上，叠加静默写入的 jsonl 经验库（成功工作流 / 踩坑 / 覆盖缺口 / 证据要求），相关片段自动召回注入，无需重训权重 `[借鉴: PentesterFlow]`
 - 🚧 Secrets 管理改进
 - 🚧 报告模板 `/report`
 
 ### 未来规划
 
 按 **阻塞价值优先** 排序——先解决"没它就不能自称自主"的问题，再扩表面积。
+路线制定期参考开源同类项目（PentesterFlow/agent、ARTEX）取长补短；新增/升级项以 `[借鉴: …]` 标注来源，**pobi 独有护城河——置信度决策引擎与自研沙箱（Docker/Playwright/WASM）生成并迭代 payload——保持不变**。
 
 **v0.2 — 硬化现有功能**（目标 Q3 2026）
 - 上下文压缩：同分通过率下 token 降低 ≥30%
 - Report v2：技术报告 + 高管摘要 + 机器可读（SARIF / JSON），每条发现附复现步骤与 CVSS
 - 核心循环单测：ADaPT 分支、ValidationGate、scope gate 拒绝路径
+- 覆盖率追踪与连续学习记忆（见上方"进行中"）落地到主循环
 
 **v0.3 — 从 Web 扩展到真正的渗透**（目标 Q4 2026）
 - 侦察工具带（Docker 封装）：nmap / httpx / nuclei / ffuf / subfinder / whatweb 等，统一输出 schema
@@ -140,12 +144,16 @@ pobi
 - 持久 shell 会话：pty + session_id，支持后渗透
 - WAF / 限流自适应 + payload 变异器
 - 每 session 凭据/密钥仓库
+- **[新增] 流量录制与审计代理**：Agent 出向流量经本地代理（默认 `:8788`）录制请求/响应留证，支撑可复现证据与审计 `[借鉴: ARTEX / PentesterFlow Burp]`
+- **[新增] Burp / 浏览器流量桥接**：导入真实渗透工作流的流量喂给 Subagent，打通与主流工具的协作 `[借鉴: PentesterFlow]`
 
 **v0.4 — 后渗透与多目标**（目标 Q1 2027）
 - 后渗透 Agent：本地枚举（LinPEAS/WinPEAS 清单）、凭据收集、内核 → exploit 检索
 - Pivot：SSH/SOCKS 管理器，可达性图作为一等状态
 - 多目标编排：目标图，A 拿到的凭据自动进入 B 的上下文
 - 跨会话知识库：`assets` / `findings` / `credentials` / `attack_paths`
+- **[升级] 多 Work Agent 并发编排**：默认 N 个并发子 Agent 并行探索不同向量/目标，Supervisor 汇总，突破当前串行分支瓶颈 `[借鉴: ARTEX]`
+- **[新增] 资产图（assets graph）+ 外部资产同步**：从 ScopeSentry 类源拉取域名/IP/端口并入目标图，供 Agent 自动消费 `[借鉴: ARTEX]`
 
 **v0.5 — 开源模型与对抗鲁棒性**（目标 Q2 2027）
 - Qwen / Llama 蒸馏微调，目标 ≥75% XBOW，公开数据集与评估工具
@@ -157,6 +165,7 @@ pobi
 - 多用户后端：AuthN/AuthZ、任务队列、产物存储
 - 合规映射：OWASP ASVS / PCI-DSS / MITRE ATT&CK 覆盖矩阵
 - 成本管控：run 级 / agent 级 token 与美元预算硬停
+- **[前置] 结构化后端存储（PostgreSQL）**：findings / 会话 / 资产 / 覆盖度落库，支撑多用户与历史审计（从原 v0.6 后段提前到基础设施层） `[借鉴: ARTEX]`
 
 ### 明确不做
 

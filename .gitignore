@@ -122,3 +122,7 @@ opencode.jsonc
 
 # Local dev artifacts (machine-local config/fingerprints/knowledge-graph)
 .ua/
+
+# AI IDE metadata / session caches — machine-local (continued)
+.aionrs/
+.opencode/
